@@ -1,0 +1,23 @@
+[project]
+name = "ecommercebachelorsproject"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Vlad_the_programmer", email = "vladyslavklymchuk@gmail.com"}
+]
+requires-python = ">=3.13"
+dependencies = [
+    "dj-rest-auth>=7.0.1",
+    "django>=5.2.7",
+    "django-allauth>=65.12.0",
+    "django-countries>=7.6.1",
+    "django-filter>=25.2",
+    "django-jazzmin>=3.0.1",
+    "djangorestframework>=3.16.1",
+    "djangorestframework-simplejwt>=5.5.1",
+    "drf-spectacular>=0.28.0",
+    "pillow>=11.3.0",
+    "python-decouple>=3.8",
+    "requests>=2.32.5",
+    "rest-framework-simplejwt>=0.0.2",
+]
