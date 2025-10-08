@@ -1,4 +1,5 @@
 import os
+from datetime import timedelta
 from pathlib import Path
 from decouple import config
 
@@ -7,7 +8,8 @@ from decouple import config
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = config('SECRET_KEY', default='django-insecure--#qd6azas=$(an^)e7w=k42=0e&b9)3)9m4@_s7l+da(0$lh44', cast=str)
+SECRET_KEY = config('SECRET_KEY',
+                    default='django-insecure--#qd6azas=$(an^)e7w=k42=0e&b9)3)9m4@_s7l+da(0$lh44', cast=str)
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)
@@ -83,8 +85,8 @@ WSGI_APPLICATION = 'EccomerceRestApi.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': config('POSTGRES_ENGINE', default='django.db.backends.sqlite3', cast=str),
-        'NAME': config('POSTGRES_DB', default='ecommerce', cast=str),
+        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'NAME': config('POSTGRES_DB', default='ecommerceDB', cast=str),
         'USER': config('POSTGRES_USER', default='postgres', cast=str),
         'PASSWORD': config('POSTGRES_PASSWORD', default='postgres', cast=str),
         'HOST': config('PG_HOST', default='localhost', cast=str),
@@ -152,7 +154,7 @@ REST_AUTH = {
     'PASSWORD_RESET_SERIALIZER': 'dj_rest_auth.serializers.PasswordResetSerializer',
     'PASSWORD_RESET_CONFIRM_SERIALIZER': 'dj_rest_auth.serializers.PasswordResetConfirmSerializer',
     'PASSWORD_CHANGE_SERIALIZER': 'dj_rest_auth.serializers.PasswordChangeSerializer',
-    'REGISTER_SERIALIZER': 'userAuth.serializers.UserRegisterSerializer',
+    'REGISTER_SERIALIZER': 'userAuth.serializers.CustomRegisterSerializer',
     'REGISTER_PERMISSION_CLASSES': (
         'rest_framework.permissions.AllowAny',
     ),
@@ -187,10 +189,36 @@ REST_FRAMEWORK['DEFAULT_AUTHENTICATION_CLASSES'] = [
 
 # Logging configuration
 LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        '': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': True,
+        },
+    },
 }
 
 # JWT Auth
 SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'UPDATE_LAST_LOGIN': False,
 }
 
 SPECTACULAR_SETTINGS = {
@@ -327,13 +355,8 @@ USE_TZ = True
 STATIC_URL = 'static/'
 MEDIA_URL = 'media/'
 
-STATIC_ROOT = os.path.join(BASE_DIR, 'static')
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
-
-# Additional locations of static files
-STATICFILES_DIRS = [
-    os.path.join(BASE_DIR, 'static'),
-]
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -355,94 +378,94 @@ if DEBUG:
     log_dir = BASE_DIR / "logs"
     log_dir.mkdir(exist_ok=True)
 
-    LOGGING = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "verbose": {
-                "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
-                "style": "{",
-            },
-            "simple": {
-                "format": "{levelname} {message}",
-                "style": "{",
-            },
-            "console": {
-                "format": "%(asctime)s %(name)-12s %(levelname)-8s %(message)s",
-            },
-            "file": {
-                "format": "%(asctime)s %(name)-15s %(levelname)-8s %(message)s",
-            },
-        },
-        "filters": {
-            "require_debug_true": {
-                "()": "django.utils.log.RequireDebugTrue",
-            },
-        },
-        "handlers": {
-            "console": {
-                "level": "DEBUG",
-                "class": "logging.StreamHandler",
-                "formatter": "console",
-            },
-            "file": {
-                "level": "INFO",
-                "class": "logging.handlers.RotatingFileHandler",
-                "formatter": "file",
-                "filename": BASE_DIR / "logs/django.log",
-                "maxBytes": 1024 * 1024 * 5,  # 5 MB
-                "backupCount": 5,
-            },
-            "mail_admins": {
-                "level": "ERROR",
-                "class": "django.utils.log.AdminEmailHandler",
-            },
-        },
-        "loggers": {
-            # Root logger - captures everything
-            "": {
-                "handlers": ["console", "file"],
-                "level": "INFO",
-                "propagate": True,
-            },
-            # Django framework loggers
-            "django": {
-                "handlers": ["console", "file"],
-                "level": "INFO",
-                "propagate": False,
-            },
-            # Database queries (set to DEBUG to see SQL queries)
-            "django.db.backends": {
-                "handlers": ["console"],
-                "level": "INFO",
-                "propagate": False,
-            },
-            # Allauth logging
-            "allauth": {
-                "handlers": ["console", "file"],
-                "level": "DEBUG",
-                "propagate": False,
-            },
-            # Email logging
-            "django.core.mail": {
-                "handlers": ["console", "file"],
-                "level": "DEBUG",
-                "propagate": False,
-            },
-            # Your apps logging
-            "users": {
-                "handlers": ["console", "file"],
-                "level": "DEBUG",
-                "propagate": False,
-            },
-            "posts": {
-                "handlers": ["console", "file"],
-                "level": "DEBUG",
-                "propagate": False,
-            },
-            # Add other apps as needed
-        },
-    }
+    # LOGGING = {
+    #     "version": 1,
+    #     "disable_existing_loggers": False,
+    #     "formatters": {
+    #         "verbose": {
+    #             "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
+    #             "style": "{",
+    #         },
+    #         "simple": {
+    #             "format": "{levelname} {message}",
+    #             "style": "{",
+    #         },
+    #         "console": {
+    #             "format": "%(asctime)s %(name)-12s %(levelname)-8s %(message)s",
+    #         },
+    #         "file": {
+    #             "format": "%(asctime)s %(name)-15s %(levelname)-8s %(message)s",
+    #         },
+    #     },
+    #     "filters": {
+    #         "require_debug_true": {
+    #             "()": "django.utils.log.RequireDebugTrue",
+    #         },
+    #     },
+    #     "handlers": {
+    #         "console": {
+    #             "level": "DEBUG",
+    #             "class": "logging.StreamHandler",
+    #             "formatter": "console",
+    #         },
+    #         "file": {
+    #             "level": "INFO",
+    #             "class": "logging.handlers.RotatingFileHandler",
+    #             "formatter": "file",
+    #             "filename": BASE_DIR / "logs/django.log",
+    #             "maxBytes": 1024 * 1024 * 5,  # 5 MB
+    #             "backupCount": 5,
+    #         },
+    #         "mail_admins": {
+    #             "level": "ERROR",
+    #             "class": "django.utils.log.AdminEmailHandler",
+    #         },
+    #     },
+    #     "loggers": {
+    #         # Root logger - captures everything
+    #         "": {
+    #             "handlers": ["console", "file"],
+    #             "level": "INFO",
+    #             "propagate": True,
+    #         },
+    #         # Django framework loggers
+    #         "django": {
+    #             "handlers": ["console", "file"],
+    #             "level": "INFO",
+    #             "propagate": False,
+    #         },
+    #         # Database queries (set to DEBUG to see SQL queries)
+    #         "django.db.backends": {
+    #             "handlers": ["console"],
+    #             "level": "INFO",
+    #             "propagate": False,
+    #         },
+    #         # Allauth logging
+    #         "allauth": {
+    #             "handlers": ["console", "file"],
+    #             "level": "DEBUG",
+    #             "propagate": False,
+    #         },
+    #         # Email logging
+    #         "django.core.mail": {
+    #             "handlers": ["console", "file"],
+    #             "level": "DEBUG",
+    #             "propagate": False,
+    #         },
+    #         # Your apps logging
+    #         "users": {
+    #             "handlers": ["console", "file"],
+    #             "level": "DEBUG",
+    #             "propagate": False,
+    #         },
+    #         "posts": {
+    #             "handlers": ["console", "file"],
+    #             "level": "DEBUG",
+    #             "propagate": False,
+    #         },
+    #         # Add other apps as needed
+    #     },
+    # }
 else:
     SITE_DOMAIN = config('SITE_DOMAIN', default='localhost:8000')
     SITE_NAME = config('SITE_NAME', default='Localhost')
