@@ -5,6 +5,7 @@ from django.db.models.signals import post_save
 from rest_framework.authtoken.models import Token
 
 
+
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_user(sender, instance, created, *args, **kwargs):
     if created:
@@ -13,14 +14,8 @@ def create_user(sender, instance, created, *args, **kwargs):
             
         instance.username.lower()
         instance.save()
-        
+
         Token.objects.get_or_create(user=instance)
         print('Token ', Token.objects.get(user=instance))
         print('user id ', instance.id)
-        
-        
-@receiver(post_save, sender=settings.AUTH_USER_MODEL)
-def update_profile(sender, instance, created, *args, **kwargs):
-    if created == False:
-        token = Token.objects.get_or_create(user=instance)
-        print('Token', token)
+

@@ -17,7 +17,7 @@ from users.models import Gender
 
 Profile = get_user_model()
 
-
+# TODO: Fix it
 class CustomRegisterView(DjRestAuthRegisterView):
     """
     Custom registration view that adds support for file uploads.
@@ -70,19 +70,31 @@ class CustomRegisterView(DjRestAuthRegisterView):
                         'description': 'User gender',
                         'nullable': True
                     },
+                    'phone_number': {
+                        'type': 'string',
+                        'description': 'User phone number',
+                        'nullable': True
+                    },
+                    'date_of_birth': {
+                        'type': 'string',
+                        'format': 'date',
+                        'description': 'User date of birth',
+                        'nullable': True
+                    },
                     'country': {
                         'type': 'string',
                         'description': 'ISO 3166-1 alpha-2 country code (e.g., US, GB, DE)',
                         'nullable': True
                     },
-                    'featured_image': {
+                    'avatar': {
                         'type': 'string',
                         'format': 'binary',
                         'description': 'Profile picture (JPEG, PNG, or GIF, max 5MB)',
                         'nullable': True
                     }
                 },
-                'required': ['email', 'first_name', 'last_name', 'password', 'password2']
+                'required': ['email', 'first_name', 'last_name', 'phone_number',
+                             'date_of_birth', 'password', 'password2']
             }
         },
         responses={

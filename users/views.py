@@ -51,7 +51,7 @@ class UserViewSet(viewsets.ModelViewSet):
         )
 
     @action(detail=True, methods=['delete'], url_path='delete-profile', permission_classes=[IsAuthenticated])
-    def delete_profile(self, request: Request, pk=None):
+    def delete_profile(self, request: Request, pk: str=None):
         profile = get_object_or_404(Profile, pk=pk)
         self.perform_destroy(profile)
         logout(request)

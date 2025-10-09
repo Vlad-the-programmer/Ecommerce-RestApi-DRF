@@ -55,11 +55,6 @@ if settings.DEBUG:
     # Serve media files
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
-    # Add a redirect from the root URL to the Swagger UI
-    urlpatterns += [
-        path('', RedirectView.as_view(url='/api/schema/swagger-ui/', permanent=False)),
-    ]
-
     # Debug toolbar
     try:
         import debug_toolbar

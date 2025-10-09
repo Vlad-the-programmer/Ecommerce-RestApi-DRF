@@ -1,104 +1,118 @@
 import uuid
+
+from django.conf import settings
 from django.db import models
 from django.core import validators
 from django.utils.translation import gettext_lazy as _
-from django.contrib.auth.models import AbstractUser, Permission
+from django.contrib.auth.models import AbstractUser
 from django_countries.fields import CountryField
+from phonenumber_field.modelfields import PhoneNumberField
+
 from .managers import UserManager
+from common.models import CommonModel
+
 
 class Gender(models.TextChoices):
     MALE = "male", _("Male")
     FEMALE = "female", _("Female")
     OTHER = "other", _("Other")
+    NOT_SPECIFIED = "not_specified", _("Not Specified")
 
 
-class Profile(AbstractUser):
+# Core User model for authentication
+class User(AbstractUser):
     USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['username']
-    
+    REQUIRED_FIELDS = ['first_name', 'last_name']
+
     objects = UserManager()
-    
-    id = models.UUIDField(default=uuid.uuid4, 
-                          unique=True,
-                          primary_key=True, 
-                          editable=False
-                        )
-    email = models.EmailField(unique=True, 
-                              blank=True,
-                              null=True, 
-                              validators=[
-                                            validators.EmailValidator()
-                                        ])
-    first_name = models.CharField(max_length=100, blank=True, null=True)
-    last_name = models.CharField(max_length=100, blank=True, null=True)
-    gender = models.CharField(_('Gender'),
-                              max_length=10,
-                              choices=Gender,
-                              default=_('Male'),
-                              null=True)
-    country = CountryField(blank_label=_('(select country)'), default='')
-    featured_img = models.ImageField(verbose_name=_('A profile image'),
-                                     upload_to='profiles', 
-                                     default='profiles/profile_default.jpg')
-    password = models.CharField(max_length=100, blank=True, null=True)
-    username = models.CharField(unique=True, max_length=100, blank=True, null=True)
-    date_joined = models.DateTimeField(auto_now_add=True, null=True)
-    last_login = models.DateTimeField(_('Last logged in'), auto_now=True,
-                                      null=True, blank=True)
-    is_staff = models.BooleanField(default=False, blank=True, null=True)
-    is_active = models.BooleanField(default=False, blank=True, null=True)
-    is_superuser = models.BooleanField(default=False, blank=True, null=True)
-    
+
+    id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        primary_key=True,
+        editable=False
+    )
+    email = models.EmailField(
+        unique=True,
+        validators=[validators.EmailValidator()]
+    )
+    username = models.CharField(
+        _("username"),
+        max_length=150,
+        unique=True,
+        blank=True,
+        null=True,
+        help_text=_(
+            "Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only."
+        ),
+        validators=[AbstractUser.username_validator],
+        error_messages={
+            "unique": _("A user with that username already exists."),
+        },
+    )
     def __str__(self):
         return self.email
-    
-    def has_perm(self, perm, obj=None):
-        return self.is_superuser
-    
-    def has_add_permission(request):
-        if request.user.is_staff:
-            return True
-        return False
 
-    def has_change_permission(request):
-        if request.user.is_staff:
-            return True
-        return False
-    
-    def has_delete_permission(request):
-        if request.user.is_staff:
-            return True
-        return False
-    
-    def has_module_perms(self, app_label):
-        return True
-    
-    
-    @classmethod
-    def get_user_by_email(cls, email):
-        try:
-            user = cls.objects.get(email__exact=email)
-        except:
-            user = None
-        if user is not None:
-            return True
-        return False 
-    
+    class Meta:
+        db_table = 'users'
+        verbose_name = _('User')
+        verbose_name_plural = _('Users')
+        ordering = ['email']
+        indexes = [
+            models.Index(fields=['email', 'first_name', 'last_name', 'is_active'])
+        ]
+
+
+# Separate Profile model for user details
+class Profile(CommonModel):
+    id = models.UUIDField(
+        default=uuid.uuid4,
+        unique=True,
+        primary_key=True,
+        editable=False
+    )
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='profile'
+    )
+    gender = models.CharField(
+        _('Gender'),
+        max_length=10,
+        choices=Gender,
+        default=Gender.NOT_SPECIFIED
+    )
+    country = CountryField(
+        blank_label=_('(select country)'),
+        default='',
+        null=True,
+        blank=True
+    )
+    avatar = models.ImageField(
+        verbose_name=_('A profile image'),
+        upload_to='profiles/',
+        default='profiles/profile_default.jpg'
+    )
+    date_of_birth = models.DateField()
+    phone_number = PhoneNumberField(unique=True, region='PL', blank=True)
+
+    def __str__(self):
+        return f"{self.user.email}'s user"
+
     @property
     def get_full_name(self):
-        return f"{self.first_name} {self.last_name}"
-    
-    def get_short_name(self):
-        return self.username
-    
+        return f"{self.user.first_name} {self.user.last_name}"
+
     @property
     def imageURL(self):
         try:
-            url = self.featured_img.url
+            url = self.avatar.url
         except:
             url = ''
         return url
 
     class Meta:
-       verbose_name_plural = 'Users'
-       ordering = ['email']
+        db_table = 'profiles'
+        verbose_name = _('Profile')
+        verbose_name_plural = _('Profiles')
+        ordering = ['user__email']

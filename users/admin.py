@@ -18,7 +18,7 @@ class CustomUserAdmin(admin.ModelAdmin):
     list_display = ['id',
                     'email',
                     'username',
-                    'featured_img',
+                    'avatar',
                     'first_name',
                     'last_name',
                     'country',

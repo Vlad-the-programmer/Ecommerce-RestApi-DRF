@@ -5,6 +5,7 @@ from django.contrib.auth.password_validation import validate_password
 
 # Third-party
 from django_countries.serializer_fields import CountryField
+from phonenumber_field.serializerfields import PhoneNumberField
 
 # DRF
 from rest_framework import serializers
@@ -63,6 +64,7 @@ class CustomLoginSerializer(DefaultUserLoginSerializer):
         super().__init__(*args, **kwargs)
         self.fields.pop('username', None)  # exclude the username field
 
+# TODO: Complete it
 @extend_schema_serializer(
     exclude_fields=['is_staff', 'is_active'],
     examples=[
@@ -75,7 +77,7 @@ class CustomLoginSerializer(DefaultUserLoginSerializer):
                 'last_name': 'Doe',
                 'gender': 'M',
                 'country': 'US',
-                'featured_image': None,
+                'avatar': None,
                 'date_joined': '2023-01-01T12:00:00Z',
                 'last_login': '2023-01-01T12:00:00Z'
             },
@@ -130,7 +132,7 @@ class UserSerializer(serializers.ModelSerializer):
         required=False,
         help_text=_('ISO 3166-1 alpha-2 country code (e.g., US, GB, DE)')
     )
-    featured_image = serializers.ImageField(
+    avatar = serializers.ImageField(
 
         required=False,
         allow_null=True,
@@ -200,6 +202,145 @@ class UserSerializer(serializers.ModelSerializer):
 
         return super().update(instance, validated_data)
 
+
+# TODO: Complete it
+@extend_schema_serializer(
+    exclude_fields=['is_staff', 'is_active'],
+    examples=[
+        OpenApiExample(
+            'User Profile Example',
+            value={
+                'username': 'johndoe',
+                'email': 'john@example.com',
+                'first_name': 'John',
+                'last_name': 'Doe',
+                'gender': 'M',
+                'country': 'US',
+                'avatar': None,
+                'date_joined': '2023-01-01T12:00:00Z',
+                'last_login': '2023-01-01T12:00:00Z'
+            },
+            response_only=True
+        )
+    ]
+)
+class ProfileDetailsSerializer(serializers.ModelSerializer):
+    """
+    Serializer for user profile data.
+    Used for retrieving and updating user information.
+    """
+    email = serializers.EmailField(
+        required=True,
+        validators=[
+            UniqueValidator(
+                queryset=Profile.objects.all(),
+                lookup='iexact',
+                message=_('A user with this email already exists.')
+            )
+        ],
+        error_messages={
+            'invalid': _('Enter a valid email address.'),
+            'blank': _('This field may not be blank.')
+        }
+    )
+    username = serializers.CharField(
+        max_length=100,
+        required=False,
+        validators=[
+            UniqueValidator(
+                queryset=Profile.objects.all(),
+                lookup='iexact',
+                message=_('A user with this username already exists.')
+            )
+        ],
+        error_messages={
+            'max_length': _('Username cannot be longer than 100 characters.'),
+            'invalid': _('Username can only contain letters, numbers, and underscores.')
+        }
+    )
+    gender = serializers.ChoiceField(
+        choices=Gender,
+        allow_blank=True,
+        allow_null=True,
+        required=False,
+        error_messages={
+            'invalid_choice': _('Please select a valid gender.')
+        }
+    )
+    country = CountryField(
+        required=False,
+        help_text=_('ISO 3166-1 alpha-2 country code (e.g., US, GB, DE)')
+    )
+    avatar = serializers.ImageField(
+
+        required=False,
+        allow_null=True,
+        use_url=True,
+        style={'input_type': 'file'},
+        help_text=_('Profile picture for the user (JPEG, PNG, or GIF, max 5MB)'),
+        validators=[
+            FileExtensionValidator(
+                allowed_extensions=['jpg', 'jpeg', 'png', 'gif'],
+                message=_('Only image files (JPEG, PNG, GIF) are allowed.')
+            ),
+            CustomFileSizeValidator(max_size=5 * 1024 * 1024, message=_('Maximum file size is 5MB.')),
+        ]
+    )
+    date_joined = serializers.DateTimeField(read_only=True)
+    last_login = serializers.DateTimeField(read_only=True)
+
+    class Meta:
+        model = Profile
+        fields = [
+            'id',
+            'username',
+            'email',
+            'first_name',
+            'last_name',
+            'gender',
+            'country',
+            'avatar',
+            'user__is_staff',
+            'is_active',
+            'date_joined',
+            'last_login',
+        ]
+        read_only_fields = ['id', 'user__is_staff', 'is_active', 'date_joined', 'last_login']
+
+    def validate_username(self, value):
+        """Validate username format."""
+        if not USERNAME_REGEX.match(value):
+            raise serializers.ValidationError(
+                _('Username can only contain letters, numbers, and underscores.')
+            )
+        return value.lower()
+
+    def validate_email(self, value):
+        """Validate email format."""
+        if not EMAIL_REGEX.match(value):
+            raise serializers.ValidationError(_('Enter a valid email address.'))
+        return value.lower()
+
+    def update(self, instance, validated_data):
+        """Update user profile with validated data."""
+        request = self.context.get('request')
+
+        if not request or instance != request.user:
+            raise NotOwner(_('You do not have permission to update this profile.'))
+
+        # Don't allow updating email through this endpoint
+        if 'email' in validated_data and validated_data['email'] != instance.email:
+            raise serializers.ValidationError({
+                'email': _('Email cannot be changed through this endpoint.')
+            })
+
+        # Process the image if provided
+        if 'featured_image' in validated_data and validated_data['featured_image'] is None:
+            # If None is passed, we want to clear the image
+            instance.featured_image.delete(save=False)
+
+        return super().update(instance, validated_data)
+
 @extend_schema_serializer(
     exclude_fields=['is_staff', 'is_active'],
     examples=[
@@ -226,6 +367,9 @@ class CustomRegisterSerializer(DefaultRegisterSerializer):
     last_name = serializers.CharField(required=True)
     gender = serializers.ChoiceField(choices=Gender, required=False)
     country = CountryField(required=False)
+    phone_number = PhoneNumberField(required=True, region='PL', blank=True)
+    date_of_birth = serializers.DateField(required=True)
+    avatar = serializers.ImageField(required=False)
 
     def get_cleaned_data(self):
         return {
@@ -235,6 +379,9 @@ class CustomRegisterSerializer(DefaultRegisterSerializer):
             'password1': self.validated_data.get('password1', ''),
             'gender': self.validated_data.get('gender'),
             'country': self.validated_data.get('country'),
+            'phone_number': self.validated_data.get('phone_number'),
+            'date_of_birth': self.validated_data.get('date_of_birth'),
+            'avatar': self.validated_data.get('avatar'),
         }
 
 class CustomPasswordResetSerializer(DefaultPasswordResetSerializer):
