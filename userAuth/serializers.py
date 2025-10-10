@@ -1,7 +1,8 @@
 import logging
 import re
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
 
 # Third-party
 from django_countries.serializer_fields import CountryField
@@ -11,65 +12,52 @@ from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 from drf_spectacular.utils import OpenApiExample, extend_schema_serializer
-from dj_rest_auth.serializers import PasswordResetSerializer as DefaultPasswordResetSerializer
 from dj_rest_auth.serializers import PasswordResetConfirmSerializer as DefaultPasswordResetConfirmSerializer
 from dj_rest_auth.registration.serializers import RegisterSerializer as DefaultRegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer as DefaultUserLoginSerializer
-from django.contrib.auth.forms import PasswordResetForm, SetPasswordForm
+from dj_rest_auth.serializers import PasswordChangeSerializer as DefaultPasswordChangeSerializer
+from django.contrib.auth.forms import SetPasswordForm
 from django.core.validators import FileExtensionValidator
 from django.utils.translation import gettext_lazy as _
 
 from common.validators import FileSizeValidator as CustomFileSizeValidator
+from userAuth.validators import (
+    validate_password_strength, validate_user_already_exists_with_username,
+    PASSWORD_MIN_LENGTH, USERNAME_REGEX, EMAIL_REGEX
+)
+
 # Local
-from users.models import Gender
-from .exceptions import NotOwner, UserAlreadyExists, WeakPasswordError
+from users.models import Gender, Profile
 
-# Email handler
-from base_utils.emails_handler import send_confirmation_email
-
-# Constants
-PASSWORD_MIN_LENGTH = 8
-USERNAME_REGEX = re.compile(r'^[a-zA-Z0-9_]+$')
-EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
-
-Profile = get_user_model()
 
 logger = logging.getLogger(__name__)
+User = get_user_model()
 
 
+# Custom fields
 class PasswordField(serializers.CharField):
     def __init__(self, **kwargs):
         kwargs.setdefault('style', {})
         kwargs['style']['input_type'] = 'password'
         kwargs['write_only'] = True
         kwargs.setdefault('min_length', PASSWORD_MIN_LENGTH)
+        kwargs.setdefault('max_length', PASSWORD_MIN_LENGTH)
         super().__init__(**kwargs)
-        self.validators.append(self._validate_password_strength)
+        self.validators.append(validate_password_strength)
 
-    def _validate_password_strength(self, value):
-        """Validate password strength."""
-        if len(value) < PASSWORD_MIN_LENGTH:
-            raise serializers.ValidationError(
-                _(f'Password must be at least {PASSWORD_MIN_LENGTH} characters long.')
-            )
-        if not any(char.isdigit() for char in value):
-            raise serializers.ValidationError(_('Password must contain at least one digit.'))
-        if not any(char.isupper() for char in value):
-            raise serializers.ValidationError(_('Password must contain at least one uppercase letter.'))
-        if not any(char.islower() for char in value):
-            raise serializers.ValidationError(_('Password must contain at least one lowercase letter.'))
 
+# Custom serializers
 class CustomLoginSerializer(DefaultUserLoginSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields.pop('username', None)  # exclude the username field
 
-# TODO: Complete it
+# TODO: Write tests
 @extend_schema_serializer(
     exclude_fields=['is_staff', 'is_active'],
     examples=[
         OpenApiExample(
-            'User Profile Example',
+            'User User Example',
             value={
                 'username': 'johndoe',
                 'email': 'john@example.com',
@@ -88,13 +76,13 @@ class CustomLoginSerializer(DefaultUserLoginSerializer):
 class UserSerializer(serializers.ModelSerializer):
     """
     Serializer for user profile data.
-    Used for retrieving and updating user information.
+    Used for retrieving user information.
     """
     email = serializers.EmailField(
         required=True,
         validators=[
             UniqueValidator(
-                queryset=Profile.objects.all(),
+                queryset=User.objects.all(),
                 lookup='iexact',
                 message=_('A user with this email already exists.')
             )
@@ -109,7 +97,7 @@ class UserSerializer(serializers.ModelSerializer):
         required=False,
         validators=[
             UniqueValidator(
-                queryset=Profile.objects.all(),
+                queryset=User.objects.all(),
                 lookup='iexact',
                 message=_('A user with this username already exists.')
             )
@@ -119,96 +107,46 @@ class UserSerializer(serializers.ModelSerializer):
             'invalid': _('Username can only contain letters, numbers, and underscores.')
         }
     )
-    gender = serializers.ChoiceField(
-        choices=Gender,
-        allow_blank=True,
-        allow_null=True,
-        required=False,
-        error_messages={
-            'invalid_choice': _('Please select a valid gender.')
-        }
-    )
-    country = CountryField(
-        required=False,
-        help_text=_('ISO 3166-1 alpha-2 country code (e.g., US, GB, DE)')
-    )
-    avatar = serializers.ImageField(
-
-        required=False,
-        allow_null=True,
-        use_url=True,
-        style={'input_type': 'file'},
-        help_text=_('Profile picture for the user (JPEG, PNG, or GIF, max 5MB)'),
-        validators=[
-            FileExtensionValidator(
-                allowed_extensions=['jpg', 'jpeg', 'png', 'gif'],
-                message=_('Only image files (JPEG, PNG, GIF) are allowed.')
-            ),
-            CustomFileSizeValidator(max_size=5 * 1024 * 1024, message=_('Maximum file size is 5MB.')),
-        ]
-    )
-    date_joined = serializers.DateTimeField(read_only=True)
-    last_login = serializers.DateTimeField(read_only=True)
 
     class Meta:
-        model = Profile
+        model = User
         fields = [
             'id',
             'username',
             'email',
             'first_name',
             'last_name',
-            'gender',
-            'country',
-            'featured_image',
             'is_staff',
             'is_active',
+            'is_superuser',
             'date_joined',
             'last_login',
+            'date_updated',
+            'date_deleted'
         ]
-        read_only_fields = ['id', 'is_staff', 'is_active', 'date_joined', 'last_login']
+        read_only_fields = ['id', 'is_staff', 'is_superuser', 'is_active',
+                            'date_joined', 'last_login', 'date_updated', 'date_deleted']
 
     def validate_username(self, value):
         """Validate username format."""
-        if not USERNAME_REGEX.match(value):
+        if value and not USERNAME_REGEX.match(value):
             raise serializers.ValidationError(
                 _('Username can only contain letters, numbers, and underscores.')
             )
-        return value.lower()
+        return value.lower() if value else value
 
     def validate_email(self, value):
         """Validate email format."""
-        if not EMAIL_REGEX.match(value):
+        if value and not EMAIL_REGEX.match(value):
             raise serializers.ValidationError(_('Enter a valid email address.'))
-        return value.lower()
-
-    def update(self, instance, validated_data):
-        """Update user profile with validated data."""
-        request = self.context.get('request')
-
-        if not request or instance != request.user:
-            raise NotOwner(_('You do not have permission to update this profile.'))
-
-        # Don't allow updating email through this endpoint
-        if 'email' in validated_data and validated_data['email'] != instance.email:
-            raise serializers.ValidationError({
-                'email': _('Email cannot be changed through this endpoint.')
-            })
-
-        # Process the image if provided
-        if 'featured_image' in validated_data and validated_data['featured_image'] is None:
-            # If None is passed, we want to clear the image
-            instance.featured_image.delete(save=False)
-
-        return super().update(instance, validated_data)
+        return value.lower() if value else value
 
 
-# TODO: Complete it
+# TODO: Write tests
 @extend_schema_serializer(
-    exclude_fields=['is_staff', 'is_active'],
     examples=[
         OpenApiExample(
-            'User Profile Example',
+            'User User Example',
             value={
                 'username': 'johndoe',
                 'email': 'john@example.com',
@@ -217,6 +155,12 @@ class UserSerializer(serializers.ModelSerializer):
                 'gender': 'M',
                 'country': 'US',
                 'avatar': None,
+                'date_of_birth': '2000-01-01',
+                'phone_number': '+1234567890',
+                'is_staff': False,
+                'is_active': True,
+                'is_superuser': False,
+                'date_updated': '2023-01-01T12:00:00Z',
                 'date_joined': '2023-01-01T12:00:00Z',
                 'last_login': '2023-01-01T12:00:00Z'
             },
@@ -227,28 +171,14 @@ class UserSerializer(serializers.ModelSerializer):
 class ProfileDetailsSerializer(serializers.ModelSerializer):
     """
     Serializer for user profile data.
-    Used for retrieving and updating user information.
+    Used for retrieving user information.
     """
-    email = serializers.EmailField(
-        required=True,
-        validators=[
-            UniqueValidator(
-                queryset=Profile.objects.all(),
-                lookup='iexact',
-                message=_('A user with this email already exists.')
-            )
-        ],
-        error_messages={
-            'invalid': _('Enter a valid email address.'),
-            'blank': _('This field may not be blank.')
-        }
-    )
     username = serializers.CharField(
-        max_length=100,
+        source='user.username',
         required=False,
         validators=[
             UniqueValidator(
-                queryset=Profile.objects.all(),
+                queryset=User.objects.all(),  # Use User model, not User
                 lookup='iexact',
                 message=_('A user with this username already exists.')
             )
@@ -258,6 +188,31 @@ class ProfileDetailsSerializer(serializers.ModelSerializer):
             'invalid': _('Username can only contain letters, numbers, and underscores.')
         }
     )
+    email = serializers.EmailField(
+        source='user.email',
+        required=False,
+        validators=[
+            UniqueValidator(
+                queryset=User.objects.all(),  # Use User model, not User
+                lookup='iexact',
+                message=_('A user with this email already exists.')
+            )
+        ],
+        error_messages={
+            'invalid': _('Enter a valid email address.'),
+            'blank': _('This field may not be blank.')
+        }
+    )
+    first_name = serializers.CharField(source='user.first_name', required=False)
+    last_name = serializers.CharField(source='user.last_name', required=False)
+
+
+    is_staff = serializers.BooleanField(source='user.is_staff', read_only=True)
+    is_superuser = serializers.BooleanField(source='user.is_superuser', read_only=True)
+    date_joined = serializers.DateTimeField(source='user.date_joined', read_only=True)
+    last_login = serializers.DateTimeField(source='user.last_login', read_only=True)
+    date_updated = serializers.DateTimeField(source='user.date_updated', read_only=True)
+
     gender = serializers.ChoiceField(
         choices=Gender,
         allow_blank=True,
@@ -272,12 +227,11 @@ class ProfileDetailsSerializer(serializers.ModelSerializer):
         help_text=_('ISO 3166-1 alpha-2 country code (e.g., US, GB, DE)')
     )
     avatar = serializers.ImageField(
-
         required=False,
         allow_null=True,
         use_url=True,
         style={'input_type': 'file'},
-        help_text=_('Profile picture for the user (JPEG, PNG, or GIF, max 5MB)'),
+        help_text=_('User picture for the user (JPEG, PNG, or GIF, max 5MB)'),
         validators=[
             FileExtensionValidator(
                 allowed_extensions=['jpg', 'jpeg', 'png', 'gif'],
@@ -286,63 +240,75 @@ class ProfileDetailsSerializer(serializers.ModelSerializer):
             CustomFileSizeValidator(max_size=5 * 1024 * 1024, message=_('Maximum file size is 5MB.')),
         ]
     )
-    date_joined = serializers.DateTimeField(read_only=True)
-    last_login = serializers.DateTimeField(read_only=True)
 
     class Meta:
-        model = Profile
+        model = User
         fields = [
             'id',
             'username',
             'email',
             'first_name',
             'last_name',
+            'is_staff',
+            'is_superuser',
+            'date_joined',
+            'last_login',
+            'date_updated',
             'gender',
             'country',
             'avatar',
-            'user__is_staff',
             'is_active',
-            'date_joined',
-            'last_login',
+            'date_of_birth',
+            'phone_number',
         ]
-        read_only_fields = ['id', 'user__is_staff', 'is_active', 'date_joined', 'last_login']
+        read_only_fields = ['id', 'email']
 
-    def validate_username(self, value):
-        """Validate username format."""
-        if not USERNAME_REGEX.match(value):
-            raise serializers.ValidationError(
-                _('Username can only contain letters, numbers, and underscores.')
-            )
-        return value.lower()
+    def to_internal_value(self, data):
+        """Convert flat structure to nested structure for user data."""
+        # Create a copy of the data
+        data = data.copy()
 
-    def validate_email(self, value):
-        """Validate email format."""
-        if not EMAIL_REGEX.match(value):
-            raise serializers.ValidationError(_('Enter a valid email address.'))
-        return value.lower()
+        # Extract user-related fields and create nested structure
+        user_data = {}
+        user_fields = ['username', 'email', 'first_name', 'last_name']
+
+        for field in user_fields:
+            if field in data:
+                user_data[field] = data.pop(field)
+
+        # If we have any user data, add it as nested 'user' key
+        if user_data:
+            data['user'] = user_data
+
+        return super().to_internal_value(data)
 
     def update(self, instance, validated_data):
-        """Update user profile with validated data."""
-        request = self.context.get('request')
+        """Update both profile and user data."""
+        # Extract user data from validated_data (it will be there now thanks to to_internal_value)
+        user_data = validated_data.pop('user', {})
 
-        if not request or instance != request.user:
-            raise NotOwner(_('You do not have permission to update this profile.'))
+        # Update User model fields if provided
+        if user_data:
+            user = instance.user
+            for attr, value in user_data.items():
+                if value is not None:
+                    setattr(user, attr, value)
+                    validate_user_already_exists_with_username(value)
+            user.save()
 
-        # Don't allow updating email through this endpoint
-        if 'email' in validated_data and validated_data['email'] != instance.email:
-            raise serializers.ValidationError({
-                'email': _('Email cannot be changed through this endpoint.')
-            })
+        # Handle avatar deletion if None is passed
+        if 'avatar' in validated_data and validated_data['avatar'] is None:
+            if instance.avatar:
+                instance.avatar.delete(save=False)
 
-        # Process the image if provided
-        if 'featured_image' in validated_data and validated_data['featured_image'] is None:
-            # If None is passed, we want to clear the image
-            instance.featured_image.delete(save=False)
+        # Update User model fields
+        instance = super().update(instance, validated_data)
 
-        return super().update(instance, validated_data)
+        return instance
 
 @extend_schema_serializer(
-    exclude_fields=['is_staff', 'is_active'],
+    exclude_fields=['is_staff', 'is_superuser', 'is_active', 'date_updated',
+                    'date_joined', 'last_login', 'date_deleted'],
     examples=[
         OpenApiExample(
             'Registration Example',
@@ -354,7 +320,10 @@ class ProfileDetailsSerializer(serializers.ModelSerializer):
                 'password': 'SecurePass123!',
                 'password2': 'SecurePass123!',
                 'gender': 'male',
-                'country': 'US'
+                'country': 'US',
+                'phone_number': '+1234567890',
+                'date_of_birth': '2000-01-01',
+                'avatar': 'path/to/avatar.jpg'
             },
             request_only=True
         )
@@ -369,56 +338,74 @@ class CustomRegisterSerializer(DefaultRegisterSerializer):
     country = CountryField(required=False)
     phone_number = PhoneNumberField(required=True, region='PL', blank=True)
     date_of_birth = serializers.DateField(required=True)
-    avatar = serializers.ImageField(required=False)
+    avatar = serializers.ImageField(required=False, allow_null=True, allow_empty_file=True)
+    password1 = PasswordField()
+    password2 = PasswordField()
+
+    def validate_username(self, username):
+        validate_user_already_exists_with_username(username)
+        return super().validate_username()
 
     def get_cleaned_data(self):
+        """Separate user data from profile data."""
         return {
-            'email': self.validated_data.get('email', ''),
-            'first_name': self.validated_data.get('first_name', ''),
-            'last_name': self.validated_data.get('last_name', ''),
-            'password1': self.validated_data.get('password1', ''),
-            'gender': self.validated_data.get('gender'),
-            'country': self.validated_data.get('country'),
-            'phone_number': self.validated_data.get('phone_number'),
-            'date_of_birth': self.validated_data.get('date_of_birth'),
-            'avatar': self.validated_data.get('avatar'),
+            'user_data': {
+                'email': self.validated_data.get('email', ''),
+                'first_name': self.validated_data.get('first_name', ''),
+                'last_name': self.validated_data.get('last_name', ''),
+                'password1': self.validated_data.get('password1', ''),
+            },
+            'profile_data': {
+                'gender': self.validated_data.get('gender'),
+                'country': self.validated_data.get('country'),
+                'phone_number': self.validated_data.get('phone_number'),
+                'date_of_birth': self.validated_data.get('date_of_birth'),
+                'avatar': self.validated_data.get('avatar'),
+            }
         }
 
-class CustomPasswordResetSerializer(DefaultPasswordResetSerializer):
-    """Custom password reset serializer."""
+    def save(self, request=None):
+        """Save user and profile data to appropriate models."""
+        cleaned_data = self.get_cleaned_data()
+        user_data = cleaned_data['user_data']
+        profile_data = cleaned_data['profile_data']
 
-    @property
-    def password_reset_form_class(self):
-        return PasswordResetForm
+        # Generate username from email
+        user_data['username'] = user_data['email'].split('@')[0]
+
+        # Create user using parent class
+        user = super().save(request)
+
+        # Update user with safe fields only
+        User.objects.filter(pk=user.pk).update(
+            first_name=user_data.get('first_name', ''),
+            last_name=user_data.get('last_name', ''),
+            is_active=False
+        )
+
+        # Refresh user instance
+        user.refresh_from_db()
+
+        # Create profile
+        Profile.objects.create(
+            user=user,
+            **{k: v for k, v in profile_data.items() if v is not None}
+        )
+
+        return user
 
 class CustomPasswordResetConfirmSerializer(DefaultPasswordResetConfirmSerializer):
     """Custom password reset confirm serializer."""
+    new_password1 = PasswordField()
+    new_password2 = PasswordField()
 
     @property
     def set_password_form_class(self):
         return SetPasswordForm
 
-class CustomPasswordChangeSerializer(serializers.Serializer):
+class CustomPasswordChangeSerializer(DefaultPasswordChangeSerializer):
     """Custom password change serializer."""
-    old_password = serializers.CharField(required=True)
-    new_password1 = serializers.CharField(required=True)
-    new_password2 = serializers.CharField(required=True)
+    old_password = PasswordField()
+    new_password1 = PasswordField()
 
-    def validate_old_password(self, value):
-        user = self.context['request'].user
-        if not user.check_password(value):
-            raise serializers.ValidationError('Your old password was entered incorrectly.')
-        return value
-
-    def validate(self, attrs):
-        if attrs['new_password1'] != attrs['new_password2']:
-            raise serializers.ValidationError({"new_password2": "The two password fields didn't match."})
-        validate_password(attrs['new_password1'], self.context['request'].user)
-        return attrs
-
-    def save(self):
-        user = self.context['request'].user
-        user.set_password(self.validated_data['new_password1'])
-        user.save()
-        return user
 

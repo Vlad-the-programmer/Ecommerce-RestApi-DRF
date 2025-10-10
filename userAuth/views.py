@@ -15,9 +15,9 @@ from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
 
 from users.models import Gender
 
-Profile = get_user_model()
+User = get_user_model()
 
-# TODO: Fix it
+# TODO: Wite tests
 class CustomRegisterView(DjRestAuthRegisterView):
     """
     Custom registration view that adds support for file uploads.
@@ -89,7 +89,7 @@ class CustomRegisterView(DjRestAuthRegisterView):
                     'avatar': {
                         'type': 'string',
                         'format': 'binary',
-                        'description': 'Profile picture (JPEG, PNG, or GIF, max 5MB)',
+                        'description': 'User picture (JPEG, PNG, or GIF, max 5MB)',
                         'nullable': True
                     }
                 },
@@ -168,8 +168,8 @@ class VerifyEmailView(BaseVerifyEmailView):
 
                 # Decode the base64 UID
                 uid = force_str(urlsafe_base64_decode(uid))
-                user = Profile._default_manager.get(pk=uid)
-            except (TypeError, ValueError, OverflowError, Profile.DoesNotExist) as e:
+                user = User._default_manager.get(pk=uid)
+            except (TypeError, ValueError, OverflowError, User.DoesNotExist) as e:
                 return Response(
                     {'detail': 'Invalid user ID in verification link.'},
                     status=status.HTTP_400_BAD_REQUEST
@@ -185,6 +185,8 @@ class VerifyEmailView(BaseVerifyEmailView):
             # If we get here, the token is valid - activate the user
             if not user.is_active:
                 user.is_active = True
+                user.profile.is_active = True
+                user.profile.save()
                 user.save()
 
                 # Update EmailAddress if using allauth

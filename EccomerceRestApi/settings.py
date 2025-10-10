@@ -152,8 +152,8 @@ REST_AUTH = {
     'JWT_TOKEN_CLAIMS_SERIALIZER': 'rest_framework_simplejwt.serializers.TokenObtainPairSerializer',
     'USER_DETAILS_SERIALIZER': 'userAuth.serializers.UserSerializer',
     'PASSWORD_RESET_SERIALIZER': 'dj_rest_auth.serializers.PasswordResetSerializer',
-    'PASSWORD_RESET_CONFIRM_SERIALIZER': 'dj_rest_auth.serializers.PasswordResetConfirmSerializer',
-    'PASSWORD_CHANGE_SERIALIZER': 'dj_rest_auth.serializers.PasswordChangeSerializer',
+    'PASSWORD_RESET_CONFIRM_SERIALIZER': 'userAuth.serializers.CustomPasswordResetConfirmSerializer',
+    'PASSWORD_CHANGE_SERIALIZER': 'userAuth.serializers.CustomPasswordChangeSerializer',
     'REGISTER_SERIALIZER': 'userAuth.serializers.CustomRegisterSerializer',
     'REGISTER_PERMISSION_CLASSES': (
         'rest_framework.permissions.AllowAny',
@@ -339,7 +339,6 @@ ACCOUNT_UNIQUE_EMAIL = True
 ACCOUNT_EMAIL_SUBJECT_PREFIX = 'Ecommerce Rest API - '
 ACCOUNT_LOGOUT_ON_PASSWORD_CHANGE = True
 
-
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
@@ -364,7 +363,7 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # User model
-AUTH_USER_MODEL = "users.Profile"
+AUTH_USER_MODEL = "users.User"
 
 # Email backend for development
 if DEBUG:

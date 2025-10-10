@@ -11,10 +11,9 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny
 
 from userAuth.serializers import UserSerializer
-from django.contrib.auth import get_user_model
 from django.utils.translation import gettext_lazy as _
 
-Profile = get_user_model()
+from users.models import Profile
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -40,14 +39,15 @@ class UserViewSet(viewsets.ModelViewSet):
         search_query = self.request.query_params.get('search')
         if search_query:
             queryset = queryset.filter(
-                Q(username__icontains=search_query) |
-                Q(first_name__icontains=search_query) |
-                Q(last_name__icontains=search_query) |
-                Q(email__icontains=search_query)
+                Q(user__username__icontains=search_query) |
+                Q(user__first_name__icontains=search_query) |
+                Q(user__last_name__icontains=search_query) |
+                Q(user__email__icontains=search_query)
             )
         return queryset.order_by('-date_joined').only(
-            'id', 'username', 'email', 'first_name', 'last_name',
-            'date_joined', 'last_login', 'is_active', 'is_staff'
+            'id', 'user__username', 'user__email', 'user__first_name', 'user__last_name',
+            'user__date_joined', 'user__last_login', 'is_active', 'user__is_staff', 'user__is_superuser',
+            'date_of_birth', 'gender', 'country', 'phone_number', 'avatar', 'date_updated'
         )
 
     @action(detail=True, methods=['delete'], url_path='delete-profile', permission_classes=[IsAuthenticated])
@@ -55,7 +55,7 @@ class UserViewSet(viewsets.ModelViewSet):
         profile = get_object_or_404(Profile, pk=pk)
         self.perform_destroy(profile)
         logout(request)
-        return Response({'detail': _('Profile deleted successfully.')}, status=status.HTTP_204_NO_CONTENT)
+        return Response({'detail': _('User deleted successfully.')}, status=status.HTTP_204_NO_CONTENT)
 
 
 
