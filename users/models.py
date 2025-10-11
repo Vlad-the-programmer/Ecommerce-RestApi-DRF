@@ -6,8 +6,8 @@ from django.contrib.auth.models import AbstractUser
 from django_countries.fields import CountryField
 from phonenumber_field.modelfields import PhoneNumberField
 
-from common.managers import NonDeletedObjectsManager
-from common.models import CommonModel
+from common.models import CommonModel, AuthCommonModel
+from userAuth.managers import ProfileManager, CustomUserManager
 
 
 class Gender(models.TextChoices):
@@ -18,7 +18,9 @@ class Gender(models.TextChoices):
 
 
 # Core User model for authentication
-class User(CommonModel, AbstractUser):
+class User(AuthCommonModel, AbstractUser):
+    objects = CustomUserManager()
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['first_name', 'last_name']
 
@@ -41,24 +43,15 @@ class User(CommonModel, AbstractUser):
         },
     )
 
-    def delete(self, *args, **kwargs):
-        """Soft delete user and their profile."""
-        # Soft delete user using CommonModel's delete
-        super().delete(*args, **kwargs)
-
-        # Also soft delete the profile if it exists
-        if hasattr(self, 'profile'):
-            self.profile.delete()
-
     def __str__(self):
         return self.email
 
-    class Meta(CommonModel.Meta):
+    class Meta(AuthCommonModel.Meta):
         db_table = 'users'
         verbose_name = _('User')
         verbose_name_plural = _('Users')
         ordering = ['email']
-        indexes = CommonModel.Meta.indexes + [
+        indexes = AuthCommonModel.Meta.indexes + [
             # User-specific single field indexes
             models.Index(fields=['email']),
             models.Index(fields=['username']),
@@ -77,6 +70,7 @@ class User(CommonModel, AbstractUser):
 
             # Search and filter combinations
             models.Index(fields=['last_login', 'is_active']),
+            models.Index(fields=['date_joined', 'is_active']),
             models.Index(fields=['date_joined', 'is_active', 'is_deleted']),
 
             # For admin and reporting queries
@@ -86,6 +80,8 @@ class User(CommonModel, AbstractUser):
 
 # Separate User model for user details
 class Profile(CommonModel):
+    objects = ProfileManager()
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -93,7 +89,7 @@ class Profile(CommonModel):
     )
     gender = models.CharField(
         _('Gender'),
-        max_length=10,
+        max_length=20,
         choices=Gender,
         default=Gender.NOT_SPECIFIED
     )
@@ -109,7 +105,22 @@ class Profile(CommonModel):
         default='profiles/profile_default.jpg'
     )
     date_of_birth = models.DateField()
-    phone_number = PhoneNumberField(unique=True, region='PL', blank=True)
+    phone_number = PhoneNumberField(unique=True)
+
+    # Notifications and preferences
+    newsletter_subscription = models.BooleanField(default=False)
+    email_notifications = models.BooleanField(default=False)
+    sms_notifications = models.BooleanField(default=False)
+    preferred_currency = models.CharField(max_length=3, default='USD')
+    preferred_language = models.CharField(max_length=10, default='en')
+
+    # Loyalty/points system
+    loyalty_points = models.IntegerField(default=0)
+    membership_tier = models.CharField(max_length=20, default='standard')
+
+    # Store preferences
+    preferred_payment_method = models.CharField(max_length=50, blank=True)
+    preferred_shipping_method = models.CharField(max_length=50, blank=True)
 
     @property
     def get_full_name(self):
@@ -122,18 +133,6 @@ class Profile(CommonModel):
         except:
             url = ''
         return url
-
-    def delete(self, *args, **kwargs):
-        """Soft delete both profile and user."""
-        # Soft delete profile using CommonModel's delete
-        super().delete(*args, **kwargs)
-
-        # Also soft delete the user
-        self.user.delete()
-
-    def hard_delete(self, *args, **kwargs):
-        """Actually delete the profile from database."""
-        super().delete(*args, **kwargs)
 
     def __str__(self):
         return f"{self.user.email}'s user"

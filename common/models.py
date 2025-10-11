@@ -9,7 +9,6 @@ class CommonModel(models.Model):
     objects = NonDeletedObjectsManager()
     all_objects = models.Manager()
 
-    id = models.AutoField(primary_key=True)
     uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
     date_created = models.DateTimeField(auto_now_add=True, null=True)
     date_updated = models.DateTimeField(auto_now=True, null=True)
@@ -51,3 +50,27 @@ class CommonModel(models.Model):
     def hard_delete(self, *args, **kwargs):
         """Actually delete the profile from database."""
         super().delete(*args, **kwargs)
+
+
+class AuthCommonModel(CommonModel):
+    """CommonModel without date_created for user auth model that have date_joined."""
+
+    class Meta:
+        abstract = True
+        indexes = [
+            # Basic single field indexes
+            models.Index(fields=['uuid']),
+            models.Index(fields=['is_active']),
+            models.Index(fields=['is_deleted']),
+            models.Index(fields=['date_updated']),
+
+            # Composite indexes for common query patterns
+            models.Index(fields=['is_active', 'is_deleted']),
+            models.Index(fields=['is_active', 'date_updated']),
+
+            # For soft delete queries
+            models.Index(fields=['is_deleted', 'date_deleted']),
+        ]
+
+    # Remove date_created field for user auth model
+    date_created = None

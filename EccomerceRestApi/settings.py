@@ -150,7 +150,7 @@ REST_AUTH = {
     'JWT_SERIALIZER': 'dj_rest_auth.serializers.JWTSerializer',
     'JWT_SERIALIZER_WITH_EXPIRATION': 'dj_rest_auth.serializers.JWTSerializerWithExpiration',
     'JWT_TOKEN_CLAIMS_SERIALIZER': 'rest_framework_simplejwt.serializers.TokenObtainPairSerializer',
-    'USER_DETAILS_SERIALIZER': 'userAuth.serializers.UserSerializer',
+    'USER_DETAILS_SERIALIZER': 'userAuth.serializers.ProfileDetailsUpdateSerializer',
     'PASSWORD_RESET_SERIALIZER': 'dj_rest_auth.serializers.PasswordResetSerializer',
     'PASSWORD_RESET_CONFIRM_SERIALIZER': 'userAuth.serializers.CustomPasswordResetConfirmSerializer',
     'PASSWORD_CHANGE_SERIALIZER': 'userAuth.serializers.CustomPasswordChangeSerializer',
@@ -338,6 +338,9 @@ ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'http'
 ACCOUNT_UNIQUE_EMAIL = True
 ACCOUNT_EMAIL_SUBJECT_PREFIX = 'Ecommerce Rest API - '
 ACCOUNT_LOGOUT_ON_PASSWORD_CHANGE = True
+
+# Phone number
+PHONENUMBER_DEFAULT_REGION = 'PL'
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/

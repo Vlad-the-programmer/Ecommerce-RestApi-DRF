@@ -10,7 +10,7 @@ from rest_framework.request import Request
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 
-from userAuth.serializers import UserSerializer
+from userAuth.serializers import UserSerializer, ProfileDetailsUpdateSerializer
 from django.utils.translation import gettext_lazy as _
 
 from users.models import Profile
@@ -19,11 +19,12 @@ from users.models import Profile
 class UserViewSet(viewsets.ModelViewSet):
     """
     User management viewset.
-    Handles: registration, list/search, retrieve/update/delete.
+    Handles: list/search, retrieve/update/delete (excludes create).
     """
     queryset = Profile.objects.all()
-    serializer_class = UserSerializer
+    serializer_class = ProfileDetailsUpdateSerializer
     parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
+    http_method_names = ['get', 'put', 'patch', 'delete', 'head', 'options']  # Exclude 'post'
 
     def get_permissions(self):
         if self.action in ['retrieve', 'update', 'partial_update', 'destroy']:
@@ -35,7 +36,7 @@ class UserViewSet(viewsets.ModelViewSet):
         return super().get_permissions()
 
     def get_queryset(self):
-        queryset = Profile.objects.prefetch_related('groups', 'user_permissions')
+        queryset = Profile.objects.all()
         search_query = self.request.query_params.get('search')
         if search_query:
             queryset = queryset.filter(
@@ -45,9 +46,17 @@ class UserViewSet(viewsets.ModelViewSet):
                 Q(user__email__icontains=search_query)
             )
         return queryset.order_by('-date_joined').only(
-            'id', 'user__username', 'user__email', 'user__first_name', 'user__last_name',
-            'user__date_joined', 'user__last_login', 'is_active', 'user__is_staff', 'user__is_superuser',
-            'date_of_birth', 'gender', 'country', 'phone_number', 'avatar', 'date_updated'
+            'uuid', 'user__username', 'user__email', 'user__first_name', 'user__last_name',
+            'user__date_joined', 'user__last_login', 'is_active', 'is_deleted', 'user__is_staff',
+            'user__is_superuser', 'date_of_birth', 'gender', 'country', 'phone_number',
+            'avatar', 'date_updated', 'date_created'
+        )
+
+    # Override create method to disable it
+    def create(self, request, *args, **kwargs):
+        return Response(
+            {'detail': _('User registration is handled through the registration endpoint.')},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED
         )
 
     @action(detail=True, methods=['delete'], url_path='delete-profile', permission_classes=[IsAuthenticated])
@@ -56,7 +65,3 @@ class UserViewSet(viewsets.ModelViewSet):
         self.perform_destroy(profile)
         logout(request)
         return Response({'detail': _('User deleted successfully.')}, status=status.HTTP_204_NO_CONTENT)
-
-
-
-

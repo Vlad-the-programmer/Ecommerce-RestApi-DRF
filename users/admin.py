@@ -2,8 +2,9 @@ from django.contrib import admin
 from django.contrib.sites.models import Site
 from django.contrib.auth import get_user_model
 
+from users.models import Profile
 
-Profile = get_user_model()
+User = get_user_model()
 
 admin.site.unregister(Site)
 
@@ -15,19 +16,19 @@ admin.site.register(Site, SiteAdmin)
  
 class CustomUserAdmin(admin.ModelAdmin):
     model = Profile
-    list_display = ['id',
-                    'email',
-                    'username',
+    list_display = ['uuid',
+                    'user__email',
+                    'user__username',
                     'avatar',
-                    'first_name',
-                    'last_name',
+                    'user__first_name',
+                    'user__last_name',
                     'country',
                     'gender',
-                    'is_superuser',
+                    'user__is_superuser',
                     'is_active',
-                    'is_staff',
-                    'date_joined',
-                    'last_login',
+                    'user__is_staff',
+                    'user__date_joined',
+                    'user__last_login',
                     ]
     list_filter = ()
     search_fields = ['email', 'username']

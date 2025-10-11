@@ -105,7 +105,9 @@ class CustomRegisterView(DjRestAuthRegisterView):
                         'Success Response',
                         value={
                             'detail': 'User registered successfully',
-                            'user_id': 1,
+                            'username': 'user',
+                            'first_name': 'user',
+                            'last_name': 'user',
                             'email': 'user@example.com'
                         },
                         status_codes=['201']
@@ -148,55 +150,17 @@ class VerifyEmailView(BaseVerifyEmailView):
     Custom email verification view that handles both GET and POST requests.
     """
 
-    def get(self, request, *args, **kwargs):
-        # Get parameters from URL first, then fall back to query params or request data
-        uid = kwargs.get('uidb64') or request.query_params.get('uid') or request.data.get('uid')
-        token = kwargs.get('token') or request.query_params.get('token') or request.data.get('token')
-
-        if not uid or not token:
-            return Response(
-                {'detail': 'Missing UID or token in the verification link.'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
+    def post(self, request, *args, **kwargs):
         try:
-            # Clean and decode the UID
-            try:
-                # Remove any URL encoding if present
-                import urllib.parse
-                uid = urllib.parse.unquote(uid)
+            response = super().post(request, *args, **kwargs)
 
-                # Decode the base64 UID
-                uid = force_str(urlsafe_base64_decode(uid))
-                user = User._default_manager.get(pk=uid)
-            except (TypeError, ValueError, OverflowError, User.DoesNotExist) as e:
-                return Response(
-                    {'detail': 'Invalid user ID in verification link.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # Verify the token
-            if not default_token_generator.check_token(user, token):
-                return Response(
-                    {'detail': 'Invalid or expired verification token.'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            # If we get here, the token is valid - activate the user
-            if not user.is_active:
+            if response:
+                confirmation = self.get_object()
+                user = User.objects.get(email=confirmation.email)
                 user.is_active = True
                 user.profile.is_active = True
                 user.profile.save()
                 user.save()
-
-                # Update EmailAddress if using allauth
-                try:
-                    from allauth.account.models import EmailAddress
-                    email_address = EmailAddress.objects.get_for_user(user, user.email)
-                    email_address.verified = True
-                    email_address.save()
-                except Exception:
-                    pass  # Skip if allauth is not used
 
             return Response(
                 {'detail': 'Email successfully verified. You can now log in.'},
@@ -213,6 +177,3 @@ class VerifyEmailView(BaseVerifyEmailView):
                     'detail': 'An error occurred while verifying your email. Please try again or request a new verification email.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
-
-
