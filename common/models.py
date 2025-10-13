@@ -19,37 +19,14 @@ class CommonModel(models.Model):
     class Meta:
         abstract = True
         indexes = [
-            # Basic single field indexes
-            models.Index(fields=['uuid']),
-            models.Index(fields=['is_active']),
-            models.Index(fields=['is_deleted']),
-            models.Index(fields=['date_created']),
-            models.Index(fields=['date_updated']),
-
-            # Composite indexes for common query patterns
-            models.Index(fields=['is_active', 'is_deleted']),
-            models.Index(fields=['date_created', 'is_active']),
-            models.Index(fields=['is_active', 'date_updated']),
-
-            # For soft delete queries
+            # Core indexes for manager patterns
+            models.Index(fields=['is_deleted']),  # Used by ALL managers
+            # Common query patterns across all models
+            models.Index(fields=['is_deleted', 'is_active']),
+            models.Index(fields=['date_created', 'is_deleted']),
             models.Index(fields=['is_deleted', 'date_deleted']),
+
         ]
-
-    def delete(self, *args, **kwargs):
-        """
-        Soft delete both profile and user.
-        """
-        from django.utils import timezone
-
-        # Soft delete user
-        self.is_active = False
-        self.is_deleted = True
-        self.date_deleted = timezone.now()
-        self.save()
-
-    def hard_delete(self, *args, **kwargs):
-        """Actually delete the profile from database."""
-        super().delete(*args, **kwargs)
 
 
 class AuthCommonModel(CommonModel):
@@ -58,19 +35,10 @@ class AuthCommonModel(CommonModel):
     class Meta:
         abstract = True
         indexes = [
-            # Basic single field indexes
-            models.Index(fields=['uuid']),
             models.Index(fields=['is_active']),
             models.Index(fields=['is_deleted']),
-            models.Index(fields=['date_updated']),
-
-            # Composite indexes for common query patterns
-            models.Index(fields=['is_active', 'is_deleted']),
-            models.Index(fields=['is_active', 'date_updated']),
-
-            # For soft delete queries
+            models.Index(fields=['is_deleted', 'is_active']),
             models.Index(fields=['is_deleted', 'date_deleted']),
         ]
 
-    # Remove date_created field for user auth model
     date_created = None

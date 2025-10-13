@@ -18,24 +18,6 @@ urlpatterns = [
     # Admin
     path('admin/', admin.site.urls),
 
-    # API Schema - JSON
-    path('api/schema/', SpectacularAPIView.as_view(api_version='v1'), name='schema'),
-
-    # Swagger UI
-    path('api/schema/swagger-ui/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
-
-    # ReDoc UI
-    path('api/schema/redoc/',
-         SpectacularRedocView.as_view(
-             url_name='schema',
-             url='/api/schema/',
-         ),
-         name='redoc'
-         ),
-
-    # Add a redirect from / to /api/schema/swagger-ui/
-    path('', RedirectView.as_view(url='/api/schema/swagger-ui/', permanent=False)),
-
     # API Endpoints
     path('api/profile/', include('users.urls')),
     path('api/auth/', include('userAuth.urls')),
@@ -43,6 +25,8 @@ urlpatterns = [
     # Allauth URLs (for email verification)
     path('accounts/', include('allauth.urls')),
 
+    # Apps
+    path('api/cart/', include('cart.urls')),
 ]
 
 # Serve media and static files in development
@@ -54,6 +38,27 @@ if settings.DEBUG:
 
     # Serve media files
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+    # Swagger docs
+    urlpatterns += [
+        # API Schema - JSON
+        path('api/schema/', SpectacularAPIView.as_view(api_version='v1'), name='schema'),
+
+        # Swagger UI
+        path('api/schema/swagger-ui/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+
+        # ReDoc UI
+        path('api/schema/redoc/',
+             SpectacularRedocView.as_view(
+                 url_name='schema',
+                 url='/api/schema/',
+             ),
+             name='redoc'
+             ),
+
+        # Add a redirect from / to /api/schema/swagger-ui/
+        path('', RedirectView.as_view(url='/api/schema/swagger-ui/', permanent=False)),
+    ]
 
     # Debug toolbar
     try:

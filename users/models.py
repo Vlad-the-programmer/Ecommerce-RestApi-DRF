@@ -17,6 +17,64 @@ class Gender(models.TextChoices):
     NOT_SPECIFIED = "not_specified", _("Not Specified")
 
 
+class ShippingAddress(CommonModel):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    # Address line approach (common for e-commerce)
+    address_line_1 = models.CharField(max_length=255, help_text=_("Street address, P.O. box, company name"))
+    address_line_2 = models.CharField(max_length=255, blank=True, null=True,
+                                      help_text=_("Apartment, suite, unit, building, floor, etc."))
+    # Optional detailed breakdown
+    house_number = models.CharField(max_length=20, blank=True, null=True)
+    street = models.CharField(max_length=100, blank=True, null=True)
+    apartment_number = models.CharField(max_length=50, blank=True, null=True)
+    zip_code = models.CharField(max_length=15, null=True, blank=True)
+    city = models.CharField(max_length=50, null=True, blank=True)
+    state = models.CharField(max_length=50, null=True, blank=True,
+                             help_text=_("State/Province/Region (e.g., Massachusetts, Ontario, Bavaria)"))
+    country = CountryField(null=True, blank=True)
+    is_default = models.BooleanField(default=False, help_text=_("Set as default shipping address"))
+
+    def __str__(self):
+        parts = []
+        if self.address_line_1:
+            parts.append(self.address_line_1)
+        if self.address_line_2:
+            parts.append(self.address_line_2)
+        parts.extend([self.city, self.state, self.zip_code, str(self.country)])
+        return ', '.join(parts)
+
+    class Meta(CommonModel.Meta):
+        db_table = "shipping_addresses"
+        verbose_name = "Shipping Address"
+        verbose_name_plural = "Shipping Addresses"
+        ordering = ["-is_default", "-date_created"]  # Default addresses first, then newest
+        indexes = CommonModel.Meta.indexes + [
+            # Core relationship indexes
+            models.Index(fields=["user", "is_deleted"]),  # User's addresses + manager
+            models.Index(fields=["user", "is_default", "is_deleted"]),  # User's default address
+
+            # Location-based indexes
+            models.Index(fields=["country", "is_deleted"]),  # Regional analytics
+            models.Index(fields=["city", "is_deleted"]),  # City-based queries
+            models.Index(fields=["state", "is_deleted"]),  # State-based queries
+            models.Index(fields=["zip_code", "is_deleted"]),  # Zip code lookups
+
+            # Composite location indexes
+            models.Index(fields=["country", "state", "city", "is_deleted"]),  # Full location queries
+            models.Index(fields=["user", "country", "is_deleted"]),  # User's addresses by country
+
+            # Default address quick lookup
+            models.Index(fields=["is_default", "is_deleted"]),  # All default addresses
+        ]
+        constraints = [
+            # Ensure only one default address per user
+            models.UniqueConstraint(
+                fields=['user'],
+                condition=models.Q(is_default=True, is_deleted=False),
+                name='unique_default_shipping_address'
+            )
+        ]
+
 # Core User model for authentication
 class User(AuthCommonModel, AbstractUser):
     objects = CustomUserManager()
@@ -52,29 +110,18 @@ class User(AuthCommonModel, AbstractUser):
         verbose_name_plural = _('Users')
         ordering = ['email']
         indexes = AuthCommonModel.Meta.indexes + [
-            # User-specific single field indexes
-            models.Index(fields=['email']),
-            models.Index(fields=['username']),
-            models.Index(fields=['first_name']),
-            models.Index(fields=['last_name']),
-            models.Index(fields=['date_joined']),
-            models.Index(fields=['last_login']),
+            # Critical authentication indexes
+            models.Index(fields=['email']),  # Used in get_by_email() - case insensitive
+            models.Index(fields=['is_deleted', 'email']),  # Default manager + email lookup
 
-            # Composite indexes for common user queries
-            models.Index(fields=['email', 'is_active']),
-            models.Index(fields=['username', 'is_active']),
-            models.Index(fields=['first_name', 'last_name']),
-            models.Index(fields=['is_active', 'date_joined']),
-            models.Index(fields=['is_staff', 'is_active']),
-            models.Index(fields=['is_superuser', 'is_active']),
+            # Manager-specific composite indexes
+            models.Index(fields=['is_deleted', 'is_active']),  # Default manager + active/inactive
+            models.Index(fields=['is_deleted', 'is_staff']),  # Admin queries
+            models.Index(fields=['is_deleted', 'is_superuser']),  # Superuser queries
 
-            # Search and filter combinations
-            models.Index(fields=['last_login', 'is_active']),
-            models.Index(fields=['date_joined', 'is_active']),
-            models.Index(fields=['date_joined', 'is_active', 'is_deleted']),
-
-            # For admin and reporting queries
-            models.Index(fields=['is_staff', 'is_superuser', 'is_active']),
+            # Performance for common operations
+            models.Index(fields=['date_joined', 'is_deleted']),  # Analytics on active users
+            models.Index(fields=['last_login', 'is_deleted']),  # Active user engagement
         ]
 
 
@@ -106,7 +153,10 @@ class Profile(CommonModel):
     )
     date_of_birth = models.DateField()
     phone_number = PhoneNumberField(unique=True)
-
+    shipping_address = models.ForeignKey("ShippingAddress", on_delete=models.CASCADE,
+                                         related_name="user_profile", null=True, blank=True)
+    billing_address = models.ForeignKey("BillingAddress", on_delete=models.CASCADE,
+                                        related_name="user_profile", null=True, blank=True)
     # Notifications and preferences
     newsletter_subscription = models.BooleanField(default=False)
     email_notifications = models.BooleanField(default=False)
@@ -143,24 +193,17 @@ class Profile(CommonModel):
         verbose_name_plural = _('Profiles')
         ordering = ['user__email']
         indexes = CommonModel.Meta.indexes + [
-            # Profile-specific single field indexes
-            models.Index(fields=['user']),  # ForeignKey index
-            models.Index(fields=['gender']),
-            models.Index(fields=['country']),
-            models.Index(fields=['date_of_birth']),
-            models.Index(fields=['phone_number']),
+            # Core relationship indexes (aligned with select_related)
+            models.Index(fields=['user', 'is_deleted']),  # ProfileManager + user lookup
+            models.Index(fields=['is_deleted', 'user']),  # Alternative order
 
-            # Composite indexes for common profile queries
-            models.Index(fields=['user', 'is_active']),
-            models.Index(fields=['gender', 'country']),
-            models.Index(fields=['date_of_birth', 'is_active']),
-            models.Index(fields=['country', 'is_active']),
+            # Unique field indexes
+            models.Index(fields=['phone_number', 'is_deleted']),  # Unique lookup on active
 
-            # For user profile lookups
-            models.Index(fields=['user', 'is_active', 'is_deleted']),
-            models.Index(fields=['phone_number', 'is_active']),
+            # Common filtering combinations
+            models.Index(fields=['is_deleted', 'country']),  # Regional analytics
+            models.Index(fields=['is_deleted', 'date_of_birth']),  # Age-based queries
 
-            # For reporting and analytics
-            models.Index(fields=['date_of_birth', 'gender', 'country']),
-            models.Index(fields=['date_created', 'country', 'is_active']),
+            # For notification preferences
+            models.Index(fields=['is_deleted', 'newsletter_subscription']),
         ]
