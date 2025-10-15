@@ -44,9 +44,12 @@ INSTALLED_APPS = [
     'drf_spectacular',
     
     # Local apps
+    'common.apps.CommonConfig', # Common utils
     'userAuth.apps.UserAuthConfig',
     'users.apps.UsersConfig',
     'cart.apps.CartConfig',
+    'products.apps.ProductsConfig',
+    'shipping.apps.ShippingConfig',
 ]
 
 MIDDLEWARE = [

@@ -75,6 +75,88 @@ class ShippingAddress(CommonModel):
             )
         ]
 
+
+class BillingAddress(CommonModel):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="billing_addresses")
+
+    # Company information (for business purchases)
+    company_name = models.CharField(max_length=100, blank=True, null=True,
+                                    help_text=_("Company name (if applicable)"))
+    tax_id = models.CharField(max_length=50, blank=True, null=True, help_text=_("VAT ID, GST number, etc."))
+
+    # Contact person
+    contact_name = models.CharField(max_length=100, help_text=_("Full name for billing contact"),
+                                    null=True, blank=True)
+
+    # Address fields
+    address_line_1 = models.CharField(max_length=255,
+                                      help_text=_("Street address, P.O. box, company name"),
+                                      null=True, blank=True)
+    address_line_2 = models.CharField(max_length=255, blank=True, null=True,
+                                      help_text=_("Apartment, suite, unit, building, floor, etc."))
+    city = models.CharField(max_length=50, null=True, blank=True)
+    state = models.CharField(
+        max_length=50,
+        null=True,
+        blank=True,
+        help_text=_("State/Province/Region (e.g., Massachusetts, Ontario, Bavaria)")
+    )
+    zip_code = models.CharField(max_length=15, null=True, blank=True)
+    country = CountryField(null=True, blank=True)
+
+    # Contact information
+    email = models.EmailField(help_text=_("Email for billing receipts"), null=True, blank=True)
+    phone = PhoneNumberField(blank=True, null=True)
+
+    # Billing specific
+    is_default = models.BooleanField(default=False, help_text=_("Set as default billing address"))
+    is_business = models.BooleanField(default=False, help_text=_("Business address"))
+
+    def __str__(self):
+        parts = []
+        if self.company_name:
+            parts.append(self.company_name)
+        parts.append(self.contact_name)
+        if self.address_line_1:
+            parts.append(self.address_line_1)
+        if self.address_line_2:
+            parts.append(self.address_line_2)
+        parts.extend([self.city, self.state, self.zip_code, str(self.country)])
+        return ', '.join(parts)
+
+    class Meta(CommonModel.Meta):
+        db_table = "billing_addresses"
+        verbose_name = "Billing Address"
+        verbose_name_plural = "Billing Addresses"
+        ordering = ["-is_default", "-date_created"]
+        indexes = CommonModel.Meta.indexes + [
+            # Core relationship indexes
+            models.Index(fields=["user", "is_deleted"]),
+            models.Index(fields=["user", "is_default", "is_deleted"]),
+            models.Index(fields=["user", "is_business", "is_deleted"]),
+
+            # Location-based indexes
+            models.Index(fields=["country", "is_deleted"]),
+            models.Index(fields=["city", "is_deleted"]),
+            models.Index(fields=["state", "is_deleted"]),
+
+            # Business-specific indexes
+            models.Index(fields=["is_business", "is_deleted"]),
+            models.Index(fields=["company_name", "is_deleted"]),
+
+            # Composite indexes
+            models.Index(fields=["country", "state", "city", "is_deleted"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user'],
+                condition=models.Q(is_default=True, is_deleted=False),
+                name='unique_default_billing_address'
+            )
+        ]
+
+
 # Core User model for authentication
 class User(AuthCommonModel, AbstractUser):
     objects = CustomUserManager()
@@ -142,21 +224,31 @@ class Profile(CommonModel):
     )
     country = CountryField(
         blank_label=_('(select country)'),
-        default='',
         null=True,
         blank=True
     )
     avatar = models.ImageField(
         verbose_name=_('A profile image'),
         upload_to='profiles/',
-        default='profiles/profile_default.jpg'
+        blank=True,
+        null=True
     )
     date_of_birth = models.DateField()
     phone_number = PhoneNumberField(unique=True)
-    shipping_address = models.ForeignKey("ShippingAddress", on_delete=models.CASCADE,
-                                         related_name="user_profile", null=True, blank=True)
-    billing_address = models.ForeignKey("BillingAddress", on_delete=models.CASCADE,
-                                        related_name="user_profile", null=True, blank=True)
+    shipping_address = models.ForeignKey(
+        ShippingAddress,
+        on_delete=models.SET_NULL,
+        related_name="profiles",
+        null=True,
+        blank=True
+    )
+    billing_address = models.ForeignKey(
+        BillingAddress,
+        on_delete=models.SET_NULL,
+        related_name="profiles",
+        null=True,
+        blank=True
+    )
     # Notifications and preferences
     newsletter_subscription = models.BooleanField(default=False)
     email_notifications = models.BooleanField(default=False)
@@ -206,4 +298,8 @@ class Profile(CommonModel):
 
             # For notification preferences
             models.Index(fields=['is_deleted', 'newsletter_subscription']),
+
+            # For addresses
+            models.Index(fields=['shipping_address', 'is_deleted']),
+            models.Index(fields=['billing_address', 'is_deleted']),
         ]

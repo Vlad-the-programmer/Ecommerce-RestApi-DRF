@@ -4,8 +4,9 @@ from django.conf import settings
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
-from cart.managers import CartManager, NonExpiredOrDeletedCouponManager
+from .managers import CartManager, NonExpiredOrDeletedCouponManager
 from common.models import CommonModel
+from .enums import CART_STATUSES
 
 
 class Coupon(CommonModel):
@@ -47,15 +48,6 @@ class Coupon(CommonModel):
         if self.used_count >= self.usage_limit:
             return False
         return True
-
-
-
-class CART_STATUSES(models.TextChoices):
-    ACTIVE = "active", _("Active")
-    FEMALE = "abandoned", _("Abandoned")
-    PAID = "paid", _("Paid")
-    REFUNDED = "refunded", _("Refunded")
-    CANCELLED = "cancelled", _("Cancelled")
 
 
 class Cart(CommonModel):

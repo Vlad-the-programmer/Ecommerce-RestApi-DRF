@@ -10,7 +10,7 @@ class CommonModel(models.Model):
     all_objects = models.Manager()
 
     uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
-    date_created = models.DateTimeField(auto_now_add=True, null=True)
+    date_created = models.DateTimeField(auto_now_add=True, null=True, db_index=True)
     date_updated = models.DateTimeField(auto_now=True, null=True)
     date_deleted = models.DateTimeField(blank=True, null=True)
     is_active = models.BooleanField(verbose_name=_('Active'), default=True, db_index=True)
@@ -19,12 +19,17 @@ class CommonModel(models.Model):
     class Meta:
         abstract = True
         indexes = [
-            # Core indexes for manager patterns
-            models.Index(fields=['is_deleted']),  # Used by ALL managers
-            # Common query patterns across all models
+            # Core manager patterns (used in ALL queries)
+            models.Index(fields=['is_deleted']),
+            models.Index(fields=['is_active']),
             models.Index(fields=['is_deleted', 'is_active']),
+
+            # Date-based queries (common for reporting and cleanup)
             models.Index(fields=['date_created', 'is_deleted']),
             models.Index(fields=['is_deleted', 'date_deleted']),
+
+            # Combined date and status queries
+            models.Index(fields=['date_created', 'is_active', 'is_deleted']),
 
         ]
 

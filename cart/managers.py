@@ -1,4 +1,4 @@
-from cart.models import CART_STATUSES
+from .enums import CART_STATUSES
 from common.managers import NonDeletedObjectsManager
 
 
