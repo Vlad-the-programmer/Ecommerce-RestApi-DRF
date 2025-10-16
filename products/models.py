@@ -1,5 +1,5 @@
 import logging
-from datetime import timezone
+from datetime import timezone, timedelta
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -15,8 +15,29 @@ from products.enums import (ProductCondition, ProductStatus,
                             ServiceType, ProductType)
 from products.managers import (ProductManager, ProductReportManager,
                                ProductAdminManager, ProductVariantManager)
+from common.models import Address
 
 logger = logging.getLogger(__name__)
+
+
+class Location(Address):
+    name = models.CharField(
+        max_length=100,
+        verbose_name=_("Location Name"),
+        help_text=_("Name of the location")
+    )
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        db_table = "locations"
+        verbose_name = _("Location")
+        verbose_name_plural = _("Locations")
+        indexes = Address.Meta.indexes + [
+            models.Index(fields=['name', 'is_deleted']),
+            models.Index(fields=['name', 'is_active']),
+        ]
 
 
 class ProductVariant(CommonModel):
@@ -39,7 +60,7 @@ class ProductVariant(CommonModel):
         verbose_name=_("Price Adjustment"),
         help_text=_("Additional price for this variant (can be negative for discounts)")
     )
-    stock_quantity = models.IntegerField(
+    stock_quantity = models.PositiveIntegerField(
         default=0,
         verbose_name=_("Variant Stock"),
         help_text=_("Stock quantity for this specific variant")
@@ -92,7 +113,7 @@ class ProductVariant(CommonModel):
 
         # Validate SKU uniqueness across variants
         if ProductVariant.objects.filter(
-                sku=self.sku,
+                sku__iexact=self.sku,
                 is_deleted=False
         ).exclude(pk=self.pk).exists():
             raise ValidationError({'sku': _("Variant SKU must be unique")})
@@ -119,6 +140,9 @@ class ProductVariant(CommonModel):
 
             # Price-based queries
             models.Index(fields=['price_adjustment', 'is_deleted']),
+        ]
+        constraints = [
+            models.CheckConstraint(check=models.Q(price_adjustment__gte=0), name="non_negative_price_adjustment"),
         ]
 
 
@@ -156,7 +180,7 @@ class ProductImage(CommonModel):
             url = ''
         return url
 
-    class Meta(CommonModel.Meta):
+    class Meta:
         db_table = "product_images"
         verbose_name = _("Product Image")
         verbose_name_plural = _("Product Images")
@@ -281,12 +305,12 @@ class Product(CommonModel):
     )
 
     # Quantitative fields
-    stock_quantity = models.IntegerField(
+    stock_quantity = models.PositiveIntegerField(
         default=0,
         verbose_name=_("Stock Quantity"),
         help_text=_("Current number of items available in inventory")
     )
-    low_stock_threshold = models.IntegerField(
+    low_stock_threshold = models.PositiveIntegerField(
         default=5,
         verbose_name=_("Low Stock Threshold"),
         help_text=_("Minimum stock level before low stock alerts")
@@ -344,6 +368,10 @@ class Product(CommonModel):
         if not self.slug and self.product_name:
             self._generate_and_set_slug()
 
+    def delete(self, *args, **kwargs):
+        self.status = ProductStatus.DELETED
+        super().delete(*args, **kwargs)
+
     def _generate_and_set_slug(self):
         """Generate and set slug without causing infinite save loop"""
         generated_slug = generate_unique_slug(Product, self, fields_to_slugify=["product_name"])
@@ -360,7 +388,6 @@ class Product(CommonModel):
             self.slug = fallback_slug
 
         logger.info(f"Set slug '{self.slug}' for product {self.pk}")
-
 
     def _can_calculate_cost_price(self):
         """Check if we have enough data to estimate cost price"""
@@ -398,10 +425,6 @@ class Product(CommonModel):
             return "high"
         else:
             return "premium"
-
-    def delete(self, *args, **kwargs):
-        self.status = ProductStatus.DELETED
-        super().delete(*args, **kwargs)
 
     @property
     def is_on_sale(self):
@@ -513,6 +536,31 @@ class Product(CommonModel):
             'total_adjustments': final_price - float(self.price)
         }
 
+    @property
+    def final_price(self):
+        """
+        Return final price of the product including all variants.
+
+        - If product has no variants, returns base price.
+        - If product has variants, returns a dict with min/max final prices.
+        """
+        variants = self.variants.filter(is_deleted=False)
+
+        if not variants.exists():
+            return float(self.price)
+
+        # Calculate final price for each variant
+        variant_prices = [
+            float(self.price + (v.price_adjustment or Decimal('0.0')))
+            for v in variants
+        ]
+
+        return {
+            'min': min(variant_prices),
+            'max': max(variant_prices),
+            'has_variation': min(variant_prices) != max(variant_prices)
+        }
+
     def validate_variant_combination(self, color=None, size=None):
         """Validate if a variant combination is available"""
         errors = []
@@ -545,6 +593,33 @@ class Product(CommonModel):
             return f"{base_name} ({', '.join(variant_parts)})"
 
         return base_name
+
+    def get_price_for_variant(self, color=None, size=None) -> float:
+        """
+        Get the final price of the product for a selected variant.
+        If no variant is selected, returns base price.
+        """
+        # If a variant is explicitly chosen
+        if color or size:
+            try:
+                variant = self.variants.get(
+                    color=color,
+                    size=size,
+                    is_deleted=False
+                )
+                return float(self.price + (variant.price_adjustment or 0))
+            except ProductVariant.DoesNotExist:
+                # If requested variant does not exist, fallback to base price
+                return float(self.price)
+
+        # If no variant selected and product has variants
+        variants = self.variants.filter(is_deleted=False)
+        if variants.exists():
+            # Return the lowest price among all variants as default
+            return float(self.price + min([v.price_adjustment or 0 for v in variants]))
+
+        # No variants at all
+        return float(self.price)
 
     def get_delivery_info(self):
         """Abstract method to be implemented by subclasses"""
@@ -600,6 +675,42 @@ class Product(CommonModel):
             models.Index(fields=['status', 'stock_status', 'category', 'is_deleted']),
             models.Index(fields=['status', 'product_type', 'category', 'is_deleted']),
             models.Index(fields=['status', 'price', 'category', 'is_deleted']),
+        ]
+        constraints = [
+            models.CheckConstraint(check=models.Q(price__gt=0), name="non_negative_greater_than_zero_price"),
+            models.CheckConstraint(check=models.Q(cost_price__gt=0), name="non_negative_greater_than_zero_cost_price"),
+            models.CheckConstraint(check=models.Q(compare_at_price__gt=0), name="non_negative_greater_than_zero_compare_at_price"),
+
+            models.CheckConstraint(check=models.Q(stock_quantity__gt=0), name="stock_quantity_gt_0"),
+            models.CheckConstraint(check=models.Q(low_stock_threshold__gt=0), name="low_stock_threshold_gt_0"),
+
+            # Compare-at price must be greater than selling price (if both set)
+            models.CheckConstraint(
+                check=(
+                        models.Q(compare_at_price__isnull=True) |
+                        models.Q(price__lt=models.F("compare_at_price"))
+                ),
+                name="compare_at_price_greater_than_price"
+            ),
+
+            # Sale date integrity
+            models.CheckConstraint(
+                check=(
+                        models.Q(sale_end_date__isnull=True) |
+                        models.Q(sale_start_date__isnull=True) |
+                        models.Q(sale_end_date__gte=models.F("sale_start_date"))
+                ),
+                name="valid_sale_date_range"
+            ),
+            # Low stock threshold cannot exceed stock quantity
+            models.CheckConstraint(
+                check=models.Q(low_stock_threshold__lte=models.F("stock_quantity")),
+                name="valid_low_stock_threshold"
+            ),
+            models.CheckConstraint(
+                check=~models.Q(pk=models.F('parent_id')),
+                name='prevent_self_parent_reference'
+            )
         ]
 
 
@@ -839,10 +950,6 @@ class PhysicalProduct(Product):
         """Additional validation for physical product specifics"""
         super().clean()
 
-        # Validate weight
-        if self.weight is not None and self.weight < 0:
-            raise ValidationError({'weight': _("Weight cannot be negative")})
-
         # Validate dimensions format
         if self.dimensions:
             import re
@@ -864,13 +971,18 @@ class PhysicalProduct(Product):
             if value is not None and value < 0:
                 raise ValidationError({field: _(f"{field.replace('_', ' ').title()} cannot be negative")})
 
+        if self.is_expired:
+            raise ValidationError({
+                'is_expired': _("This product has expired and cannot be sold.")
+            })
+
     def __str__(self):
         base_str = super().__str__()
         if self.sku:
             return f"{base_str} [{self.sku}]"
         return base_str
 
-    class Meta(Product.Meta):
+    class Meta:
         db_table = "physical_products"
         verbose_name = _("Physical Product")
         verbose_name_plural = _("Physical Products")
@@ -899,6 +1011,25 @@ class PhysicalProduct(Product):
             # Cost analysis indexes
             models.Index(fields=['manufacturing_cost', 'is_deleted']),
         ]
+        constraints = [
+            models.CheckConstraint(check=models.Q(weight__gte=0), name="non_negative_weight"),
+            models.CheckConstraint(check=models.Q(manufacturing_cost__gte=0), name="non_negative_manufacturing_cost"),
+            models.CheckConstraint(check=models.Q(packaging_cost__gte=0), name="non_negative_packaging_cost"),
+            models.CheckConstraint(check=models.Q(packaging_cost__gte=0), name="non_negative_packaging_cost"),
+            models.CheckConstraint(check=models.Q(shipping_to_warehouse_cost__gte=0), name="non_negative_shipping_to_warehouse_cost"),
+
+            # Shelf life cannot be negative or zero
+            models.CheckConstraint(
+                check=models.Q(shelf_life__gt=0) | models.Q(shelf_life__isnull=True),
+                name="positive_shelf_life"
+            ),
+
+            # Ensure SKU uniqueness scoped to non-deleted items
+            models.UniqueConstraint(
+                fields=['sku', 'is_deleted'],
+                name='unique_sku_non_deleted'
+            ),
+        ]
 
 
 class DigitalProduct(Product):
@@ -911,7 +1042,7 @@ class DigitalProduct(Product):
         verbose_name=_("Download File"),
         help_text=_("Digital file for customer download")
     )
-    download_limit = models.IntegerField(
+    download_limit = models.PositiveIntegerField(
         default=1,
         verbose_name=_("Download Limit"),
         help_text=_("Number of times the file can be downloaded")
@@ -921,7 +1052,7 @@ class DigitalProduct(Product):
         verbose_name=_("Access Duration"),
         help_text=_("How long customers have access (e.g., 30 days)")
     )
-    file_size = models.BigIntegerField(
+    file_size = models.PositiveBigIntegerField(
         null=True, blank=True,
         verbose_name=_("File Size"),
         help_text=_("File size in bytes")
@@ -997,6 +1128,12 @@ class DigitalProduct(Product):
         # Digital products don't have traditional stock limits for the base product
         return True
 
+    def clean(self):
+        super().clean()
+
+        if self.access_duration is not None and self.access_duration < timedelta(days=1):
+            raise ValidationError(_("Access duration must be at least 1 day"))
+
     # For digital products, stock is often unlimited
     def save(self, *args, **kwargs):
         if not self.track_inventory:
@@ -1004,7 +1141,7 @@ class DigitalProduct(Product):
             self.stock_status = StockStatus.IN_STOCK
         super().save(*args, **kwargs)
 
-    class Meta(Product.Meta):
+    class Meta:
         db_table = "digital_products"
         verbose_name = _("Digital Product")
         verbose_name_plural = _("Digital Products")
@@ -1027,6 +1164,12 @@ class DigitalProduct(Product):
             models.Index(fields=['download_limit', 'status', 'is_deleted']),
             models.Index(fields=['access_duration', 'status', 'is_deleted']),
         ]
+        constraints = [
+            models.CheckConstraint(check=models.Q(download_limit__gte=1), name="non_negative_greater_than_1_download_limit"),
+            models.CheckConstraint(check=models.Q(file_size__gte=0) | models.Q(file_size__isnull=True),
+                                   name="non_negative_file_size"),
+            models.CheckConstraint(check=models.Q(access_duration__gte=0), name="non_negative_access_duration"),
+        ]
 
 
 class ServiceProduct(Product):
@@ -1041,6 +1184,15 @@ class ServiceProduct(Product):
         default=False,
         verbose_name=_("Location Required"),
         help_text=_("Whether the service requires physical location access")
+    )
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name=_("Location"),
+        help_text=_("Location where the service is provided"),
+        related_name='service_products'
     )
     service_type = models.CharField(
         max_length=50,
@@ -1119,7 +1271,16 @@ class ServiceProduct(Product):
         # For example: check provider availability, scheduling conflicts, etc.
         return True
 
-    class Meta(Product.Meta):
+    def clean(self):
+        super().clean()
+
+        if self.duration < timedelta(minutes=5):
+            raise ValidationError(_("Duration of the service product must be at least 5 minutes"))
+
+        if self.location_required and not self.location:
+            raise ValidationError(_("Location is required for this service product"))
+
+    class Meta:
         db_table = "service_products"
         verbose_name = _("Service")
         verbose_name_plural = _("Services")

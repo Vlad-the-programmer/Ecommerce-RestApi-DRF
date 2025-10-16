@@ -1,7 +1,12 @@
 import uuid
+from datetime import timezone
+from decimal import Decimal
+
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+from django_countries.fields import CountryField
 
+from cart.managers import CartItemManager
 from common.managers import NonDeletedObjectsManager
 
 
@@ -33,6 +38,25 @@ class CommonModel(models.Model):
 
         ]
 
+    def delete(self, *args, **kwargs):
+        """Soft delete: mark as deleted, cascade to related objects."""
+        if self.is_deleted:
+            return  # Already deleted
+
+        self.is_deleted = True
+        self.date_deleted = timezone.now()
+        self.save(update_fields=["is_deleted", "date_deleted"])
+
+        # Soft cascade: mark related CASCADE FKs as deleted too
+        for rel in self._meta.related_objects:
+            if rel.on_delete == models.CASCADE:
+                related_manager = getattr(self, rel.get_accessor_name(), None)
+                if related_manager:
+                    qs = related_manager.all()
+                    for obj in qs:
+                        if isinstance(obj, CommonModel):
+                            obj.delete()
+
 
 class AuthCommonModel(CommonModel):
     """CommonModel without date_created for user auth model that have date_joined."""
@@ -47,3 +71,99 @@ class AuthCommonModel(CommonModel):
         ]
 
     date_created = None
+
+
+class Address(CommonModel):
+    # Address line approach (common for e-commerce)
+    address_line_1 = models.CharField(max_length=255, help_text=_("Street address, P.O. box, company name"))
+    address_line_2 = models.CharField(max_length=255, blank=True, null=True,
+                                      help_text=_("Apartment, suite, unit, building, floor, etc."))
+    # Optional detailed breakdown
+    house_number = models.CharField(max_length=20, blank=True, null=True)
+    street = models.CharField(max_length=100, blank=True, null=True)
+    apartment_number = models.CharField(max_length=50, blank=True, null=True)
+    zip_code = models.CharField(max_length=15, null=True, blank=True)
+    city = models.CharField(max_length=50, null=True, blank=True)
+    state = models.CharField(max_length=50, null=True, blank=True,
+                             help_text=_("State/Province/Region (e.g., Massachusetts, Ontario, Bavaria)"))
+    country = CountryField(null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.address_line_1}, {self.city}, {self.state}, {self.country}"
+
+    class Meta:
+        abstract=True
+        ordering = ["-is_active", "-date_created"]
+        indexes = CommonModel.Meta.indexes + [
+
+            # Location-based indexes
+            models.Index(fields=["country", "is_deleted"]),  # Regional analytics
+            models.Index(fields=["city", "is_deleted"]),  # City-based queries
+            models.Index(fields=["state", "is_deleted"]),  # State-based queries
+            models.Index(fields=["zip_code", "is_deleted"]),  # Zip code lookups
+
+            # Composite location indexes
+            models.Index(fields=["country", "state", "city", "is_deleted"]),  # Full location queries
+
+        ]
+
+
+class ItemCommonModel(CommonModel):
+    """Item model base for models like CartItem, OrderItem etc. Represents a product"""
+
+    objects = CartItemManager()
+
+    product = models.ForeignKey('products.Product', on_delete=models.SET_NULL, null=True, blank=True)
+    quantity = models.PositiveIntegerField(help_text=_("Quantity of the product"), default=1)
+    total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00,
+                                      help_text=_("Total price of the product"))
+
+    variant = models.ForeignKey(
+        'products.ProductVariant',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+        help_text=_("Selected variant for this cart item")
+    )
+
+    class Meta:
+        abstract = True
+        indexes = [
+            models.Index(fields=['is_deleted', 'is_active', 'product']),
+            models.Index(fields=['is_deleted', 'is_active', 'variant']),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['product', 'variant'],
+                name='unique_item',
+                condition=models.Q(is_deleted=False)
+            ),
+            models.CheckConstraint(
+                check=models.Q(product__isnull=False) | models.Q(variant__isnull=False),
+                name='product_or_variant_must_be_set'
+            ),
+            models.CheckConstraint(
+                check=models.Q(quantity__gte=1),
+                name='quantity_must_be_at_least_1'
+            )
+        ]
+
+    @property
+    def item_final_price(self) -> float:
+        """Final price for this item, taking variant into account"""
+        if self.variant:
+            return float(self.variant.final_price)
+        if self.product:
+            return self.product.get_price_for_variant(
+                color=getattr(self.variant, 'color', None),
+                size=getattr(self.variant, 'size', None)
+            )
+        return 0.0
+
+    def save(self, *args, **kwargs):
+        """Automatically calculate total price before saving"""
+        price = Decimal(str(self.item_final_price or 0))
+        quantity = Decimal(str(self.quantity or 0))
+        self.total_price = price * quantity
+        super().save(*args, **kwargs)

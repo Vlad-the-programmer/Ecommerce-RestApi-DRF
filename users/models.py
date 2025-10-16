@@ -6,7 +6,7 @@ from django.contrib.auth.models import AbstractUser
 from django_countries.fields import CountryField
 from phonenumber_field.modelfields import PhoneNumberField
 
-from common.models import CommonModel, AuthCommonModel
+from common.models import CommonModel, AuthCommonModel, Address
 from userAuth.managers import ProfileManager, CustomUserManager
 
 
@@ -17,21 +17,9 @@ class Gender(models.TextChoices):
     NOT_SPECIFIED = "not_specified", _("Not Specified")
 
 
-class ShippingAddress(CommonModel):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    # Address line approach (common for e-commerce)
-    address_line_1 = models.CharField(max_length=255, help_text=_("Street address, P.O. box, company name"))
-    address_line_2 = models.CharField(max_length=255, blank=True, null=True,
-                                      help_text=_("Apartment, suite, unit, building, floor, etc."))
-    # Optional detailed breakdown
-    house_number = models.CharField(max_length=20, blank=True, null=True)
-    street = models.CharField(max_length=100, blank=True, null=True)
-    apartment_number = models.CharField(max_length=50, blank=True, null=True)
-    zip_code = models.CharField(max_length=15, null=True, blank=True)
-    city = models.CharField(max_length=50, null=True, blank=True)
-    state = models.CharField(max_length=50, null=True, blank=True,
-                             help_text=_("State/Province/Region (e.g., Massachusetts, Ontario, Bavaria)"))
-    country = CountryField(null=True, blank=True)
+class ShippingAddress(Address):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="shipping_addresses")
     is_default = models.BooleanField(default=False, help_text=_("Set as default shipping address"))
 
     def __str__(self):
@@ -43,24 +31,17 @@ class ShippingAddress(CommonModel):
         parts.extend([self.city, self.state, self.zip_code, str(self.country)])
         return ', '.join(parts)
 
-    class Meta(CommonModel.Meta):
+    class Meta:
         db_table = "shipping_addresses"
         verbose_name = "Shipping Address"
         verbose_name_plural = "Shipping Addresses"
         ordering = ["-is_default", "-date_created"]  # Default addresses first, then newest
-        indexes = CommonModel.Meta.indexes + [
+        indexes = Address.Meta.indexes + [
             # Core relationship indexes
             models.Index(fields=["user", "is_deleted"]),  # User's addresses + manager
             models.Index(fields=["user", "is_default", "is_deleted"]),  # User's default address
 
-            # Location-based indexes
-            models.Index(fields=["country", "is_deleted"]),  # Regional analytics
-            models.Index(fields=["city", "is_deleted"]),  # City-based queries
-            models.Index(fields=["state", "is_deleted"]),  # State-based queries
-            models.Index(fields=["zip_code", "is_deleted"]),  # Zip code lookups
 
-            # Composite location indexes
-            models.Index(fields=["country", "state", "city", "is_deleted"]),  # Full location queries
             models.Index(fields=["user", "country", "is_deleted"]),  # User's addresses by country
 
             # Default address quick lookup
@@ -76,7 +57,7 @@ class ShippingAddress(CommonModel):
         ]
 
 
-class BillingAddress(CommonModel):
+class BillingAddress(Address):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
                              related_name="billing_addresses")
 
@@ -89,21 +70,7 @@ class BillingAddress(CommonModel):
     contact_name = models.CharField(max_length=100, help_text=_("Full name for billing contact"),
                                     null=True, blank=True)
 
-    # Address fields
-    address_line_1 = models.CharField(max_length=255,
-                                      help_text=_("Street address, P.O. box, company name"),
-                                      null=True, blank=True)
-    address_line_2 = models.CharField(max_length=255, blank=True, null=True,
-                                      help_text=_("Apartment, suite, unit, building, floor, etc."))
-    city = models.CharField(max_length=50, null=True, blank=True)
-    state = models.CharField(
-        max_length=50,
-        null=True,
-        blank=True,
-        help_text=_("State/Province/Region (e.g., Massachusetts, Ontario, Bavaria)")
-    )
-    zip_code = models.CharField(max_length=15, null=True, blank=True)
-    country = CountryField(null=True, blank=True)
+
 
     # Contact information
     email = models.EmailField(help_text=_("Email for billing receipts"), null=True, blank=True)
@@ -125,28 +92,21 @@ class BillingAddress(CommonModel):
         parts.extend([self.city, self.state, self.zip_code, str(self.country)])
         return ', '.join(parts)
 
-    class Meta(CommonModel.Meta):
+    class Meta:
         db_table = "billing_addresses"
         verbose_name = "Billing Address"
         verbose_name_plural = "Billing Addresses"
         ordering = ["-is_default", "-date_created"]
-        indexes = CommonModel.Meta.indexes + [
+        indexes = Address.Meta.indexes + [
             # Core relationship indexes
             models.Index(fields=["user", "is_deleted"]),
             models.Index(fields=["user", "is_default", "is_deleted"]),
             models.Index(fields=["user", "is_business", "is_deleted"]),
 
-            # Location-based indexes
-            models.Index(fields=["country", "is_deleted"]),
-            models.Index(fields=["city", "is_deleted"]),
-            models.Index(fields=["state", "is_deleted"]),
-
             # Business-specific indexes
             models.Index(fields=["is_business", "is_deleted"]),
             models.Index(fields=["company_name", "is_deleted"]),
 
-            # Composite indexes
-            models.Index(fields=["country", "state", "city", "is_deleted"]),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -279,7 +239,7 @@ class Profile(CommonModel):
     def __str__(self):
         return f"{self.user.email}'s user"
 
-    class Meta(CommonModel.Meta):
+    class Meta:
         db_table = 'profiles'
         verbose_name = _('Profile')
         verbose_name_plural = _('Profiles')

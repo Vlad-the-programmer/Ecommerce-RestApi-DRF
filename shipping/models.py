@@ -1,16 +1,48 @@
+from decimal import Decimal
+from typing import Optional
+
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django_countries.fields import CountryField
 
 from common.models import CommonModel
+from users.models import ShippingAddress
 from .enums import ShippingType, CarrierType
+from .managers import ShippingClassManager
+
+
+class InternationalRate(CommonModel):
+    country = CountryField(unique=True)
+    surcharge = models.DecimalField(max_digits=6, decimal_places=2)
+
+    def __str__(self):
+        return f"{self.country} - {self.surcharge}"
+
+    class Meta:
+        db_table = "international_rates"
+        verbose_name = _("International Rate")
+        verbose_name_plural = _("International Rates")
+        ordering = ["country"]
+        indexes = CommonModel.Meta.indexes + [
+            models.Index(fields=["surcharge"]),
+            models.Index(fields=['country', 'is_active', 'is_deleted']),
+            models.Index(fields=['surcharge', 'is_active', 'is_deleted']),
+            models.Index(fields=['country', 'is_active']),
+            models.Index(fields=['surcharge', 'is_active']),
+
+        ]
+        constraints = [
+            models.CheckConstraint(check=models.Q(surcharge__gte=0), name="non_negative_surcharge")
+        ]
 
 
 class ShippingClass(CommonModel):
     """
     Shipping class for defining shipping methods, costs, and delivery estimates.
     """
+
+    objects = ShippingClassManager()
 
     name = models.CharField(
         max_length=100,
@@ -55,7 +87,7 @@ class ShippingClass(CommonModel):
         validators=[MinValueValidator(0), MaxValueValidator(365)]
     )
 
-    estimated_days_max = models.IntegerField(
+    estimated_days_max = models.PositiveIntegerField(
         verbose_name=_("Maximum Estimated Days"),
         help_text=_("Maximum number of business days for delivery"),
         validators=[MinValueValidator(1), MaxValueValidator(365)]
@@ -76,6 +108,7 @@ class ShippingClass(CommonModel):
         decimal_places=2,
         null=True,
         blank=True,
+        default=0.00,
         verbose_name=_("Free Shipping Threshold"),
         help_text=_("Order total required for free shipping (leave empty if not applicable)")
     )
@@ -138,19 +171,15 @@ class ShippingClass(CommonModel):
         help_text=_("Countries where this shipping method is available")
     )
 
-    # Operational fields
-    is_active = models.BooleanField(
-        default=True,
-        verbose_name=_("Active"),
-        help_text=_("Whether this shipping class is currently available for selection")
-    )
-
-    handling_time_days = models.IntegerField(
+    handling_time_days = models.PositiveIntegerField(
         default=1,
         verbose_name=_("Handling Time (Days)"),
         help_text=_("Number of business days needed to process order before shipping"),
         validators=[MinValueValidator(0), MaxValueValidator(14)]
     )
+
+    order = models.OneToOneField("orders.Order", on_delete=models.CASCADE, related_name="shipping_class")
+    shipping_address = models.ForeignKey(ShippingAddress, on_delete=models.CASCADE, related_name="shipping_classes")
 
     def __str__(self):
         return f"{self.name} ({self.get_shipping_type_display()})"
@@ -176,7 +205,11 @@ class ShippingClass(CommonModel):
             'max': total_max
         }
 
-    def calculate_shipping_cost(self, weight_kg: float = 0, order_total: float = 0,
+    def calculate_order_weight(self) -> float:
+        """Calculate total order weight in kilograms"""
+        return float(self.order.order_items.aggregate(total=models.Sum('weight'))['total']) or float(0)
+
+    def calculate_shipping_cost(self, order_total: float = 0,
                                 destination_country_code: str = None) -> float:
         """
         Calculate shipping cost based on weight, order total, and destination.
@@ -197,8 +230,8 @@ class ShippingClass(CommonModel):
         # Calculate base cost + weight-based cost
         total_cost = float(self.base_cost)
 
-        if weight_kg > 0 and self.cost_per_kg > 0:
-            total_cost += float(self.cost_per_kg) * weight_kg
+        if self.calculate_order_weight() > 0 and self.cost_per_kg > 0:
+            total_cost += float(self.cost_per_kg) * self.calculate_order_weight()
 
         # Add international surcharge if applicable
         if destination_country_code and self.shipping_type == ShippingType.INTERNATIONAL:
@@ -212,11 +245,10 @@ class ShippingClass(CommonModel):
 
         return round(total_cost, 2)
 
-    def _get_international_surcharge(self, country_code: str) -> float:
+    def _get_international_surcharge(self, country_code: str) -> Optional[Decimal]:
         """Get international surcharge for specific country"""
-        # This could be implemented with a separate InternationalRates model
-        # For now, return a flat surcharge
-        return 15.00  # Example flat international surcharge
+        rate = InternationalRate.objects.filter(country=country_code, is_active=True, is_deleted=False).first()
+        return rate.surcharge if rate else Decimal('0.00')
 
     def can_ship_to_country(self, country_code: str) -> bool:
         """Check if this shipping class can ship to a specific country"""
@@ -347,33 +379,27 @@ class ShippingClass(CommonModel):
                 'max_weight_kg': _("Maximum weight must be greater than 0")
             })
 
-    class Meta(CommonModel.Meta):
+    class Meta:
         db_table = "shipping_classes"
         verbose_name = _("Shipping Class")
         verbose_name_plural = _("Shipping Classes")
         ordering = ["base_cost", "estimated_days_min"]
         indexes = CommonModel.Meta.indexes + [
+            models.Index(fields=['order', 'is_deleted', 'is_active']),
+            models.Index(fields=['shipping_address', 'is_deleted', 'is_active']),
+
             # Core shipping class indexes
-            models.Index(fields=['name', 'is_deleted']),
-            models.Index(fields=['shipping_type', 'is_deleted']),
-            models.Index(fields=['carrier_type', 'is_deleted']),
-            models.Index(fields=['is_active', 'is_deleted']),
+            models.Index(fields=['shipping_type', 'is_deleted', 'is_active']),
+            models.Index(fields=['carrier_type', 'is_deleted', 'is_active']),
 
             # Cost and delivery speed indexes
-            models.Index(fields=['base_cost', 'is_deleted']),
-            models.Index(fields=['estimated_days_min', 'estimated_days_max', 'is_deleted']),
-            models.Index(fields=['free_shipping_threshold', 'is_deleted']),
+            models.Index(fields=['free_shipping_threshold', 'is_deleted', 'is_active']),
 
             # Operational indexes
-            models.Index(fields=['is_active', 'shipping_type', 'base_cost']),
             models.Index(fields=['domestic_only', 'is_active', 'is_deleted']),
 
             # Composite indexes for common queries
             models.Index(fields=['shipping_type', 'carrier_type', 'is_active', 'is_deleted']),
-            models.Index(fields=['base_cost', 'estimated_days_min', 'is_active', 'is_deleted']),
-
-            # Performance indexes
-            models.Index(fields=['is_active', 'base_cost', 'estimated_days_min']),
         ]
         constraints = [
             models.CheckConstraint(
@@ -381,7 +407,19 @@ class ShippingClass(CommonModel):
                 name='valid_estimated_days_range'
             ),
             models.CheckConstraint(
-                check=models.Q(base_cost__gte=0),
-                name='non_negative_base_cost'
+                check=models.Q(base_cost__gt=0),
+                name='non_negative_greater_than_zero_base_cost'
+            ),
+            models.CheckConstraint(
+                check=models.Q(max_weight_kg__gt=0),
+                name='non_negative_greater_than_zero_max_weight_kg'
+            ),
+            models.CheckConstraint(
+                check=models.Q(insurance_cost__gte=0),
+                name='non_negative_insurance_cost'
+            ),
+            models.CheckConstraint(
+                check=models.Q(free_shipping_threshold__gte=0),
+                name='non_negative_free_shipping_threshold'
             ),
         ]

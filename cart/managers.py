@@ -12,3 +12,9 @@ class NonExpiredOrDeletedCouponManager(NonDeletedObjectsManager):
     def get_queryset(self):
         return super().get_queryset().filter(is_expired=False)
 
+class CartItemManager(NonDeletedObjectsManager):
+    """Default queryset includes active cart items."""
+    def get_queryset(self):
+        return super().get_queryset().filter(is_active=True)
+
+
