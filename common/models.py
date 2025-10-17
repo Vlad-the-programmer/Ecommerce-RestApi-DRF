@@ -1,13 +1,18 @@
+import logging
 import uuid
 from datetime import timezone
 from decimal import Decimal
+from typing import Optional
 
 from django.db import models
+from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 from django_countries.fields import CountryField
 
 from cart.managers import CartItemManager
 from common.managers import NonDeletedObjectsManager
+
+logger = logging.getLogger(__name__)
 
 
 class CommonModel(models.Model):
@@ -167,3 +172,70 @@ class ItemCommonModel(CommonModel):
         quantity = Decimal(str(self.quantity or 0))
         self.total_price = price * quantity
         super().save(*args, **kwargs)
+
+
+class SlugFieldCommonModel(CommonModel):
+    """Common model for models with slug field"""
+    slug = models.SlugField(
+        unique=True,
+        max_length=255,
+        blank=True,
+        verbose_name=_("URL Slug"),
+        help_text=_("Unique URL-friendly identifier for the product")
+    )
+
+    class Meta:
+        abstract = True
+        indexes = [
+            models.Index(fields=['slug'], name='common_slug_idx'),
+        ]
+
+    def check_slug_unique(self, slug: str) -> bool:
+        queryset = self.__class__.objects.filter(slug=slug)
+        if self.pk:
+            queryset = queryset.exclude(pk=self.pk)
+        return not queryset.exists()
+
+    def generate_unique_slug(self, fields_to_slugify: list[str]) -> Optional[str]:
+        field_values = []
+        for field in fields_to_slugify:
+            value = getattr(self, field, None)
+            if callable(value):
+                value = value()
+            if value:
+                field_values.append(str(value))
+        if not field_values:
+            return None
+
+        base_slug = slugify("-".join(field_values))
+        slug = base_slug
+        counter = 1
+
+        while not self.check_slug_unique(slug):
+            slug = f"{base_slug}-{counter}"
+            counter += 1
+            if counter > 100:
+                slug = f"{base_slug}-{uuid.uuid4().hex[:8]}"
+                break
+
+        return slug
+
+    def _generate_and_set_slug(self, fields_to_slugify_list: list[str]):
+        generated_slug = self.generate_unique_slug(fields_to_slugify_list)
+        if generated_slug:
+            self.__class__.objects.filter(pk=self.pk).update(slug=generated_slug)
+            self.slug = generated_slug
+        else:
+            fallback_slug = slugify(f"{self.__class__.__name__.lower()}-{self.uuid}")
+            self.__class__.objects.filter(pk=self.pk).update(slug=fallback_slug)
+            self.slug = fallback_slug
+
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        super().save(*args, **kwargs)
+        if is_new or not self.slug:
+            # Customize fields used to generate slug per model
+            fields_to_slugify = getattr(self, "slug_fields", ["slug"])  # default fallback
+            self._generate_and_set_slug(fields_to_slugify)
+
+

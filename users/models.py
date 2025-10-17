@@ -146,24 +146,19 @@ class User(AuthCommonModel, AbstractUser):
     def __str__(self):
         return self.email
 
-    class Meta(AuthCommonModel.Meta):
+    class Meta:
         db_table = 'users'
         verbose_name = _('User')
         verbose_name_plural = _('Users')
         ordering = ['email']
         indexes = AuthCommonModel.Meta.indexes + [
             # Critical authentication indexes
-            models.Index(fields=['email']),  # Used in get_by_email() - case insensitive
-            models.Index(fields=['is_deleted', 'email']),  # Default manager + email lookup
-
-            # Manager-specific composite indexes
-            models.Index(fields=['is_deleted', 'is_active']),  # Default manager + active/inactive
-            models.Index(fields=['is_deleted', 'is_staff']),  # Admin queries
-            models.Index(fields=['is_deleted', 'is_superuser']),  # Superuser queries
-
-            # Performance for common operations
-            models.Index(fields=['date_joined', 'is_deleted']),  # Analytics on active users
-            models.Index(fields=['last_login', 'is_deleted']),  # Active user engagement
+            models.Index(fields=['email']),
+            models.Index(fields=['is_deleted', 'email']),
+            models.Index(fields=['is_deleted', 'is_staff']),
+            models.Index(fields=['is_deleted', 'is_superuser']),
+            models.Index(fields=['date_joined', 'is_deleted']),
+            models.Index(fields=['last_login', 'is_deleted']),
         ]
 
 

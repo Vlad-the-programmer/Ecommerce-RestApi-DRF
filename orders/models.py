@@ -10,6 +10,9 @@ from orders.enums import OrderStatuses
 from shipping.models import ShippingClass
 
 class OrderTax(CommonModel):
+    """
+    OrderTax model with relation to Order to keep track of taxes applied to the order.
+    """
     order = models.ForeignKey("orders.Order", on_delete=models.CASCADE, related_name="order_taxes")
     name = models.CharField(max_length=100, help_text=_("Tax name"))
     rate = models.DecimalField(max_digits=5, decimal_places=2, default=0.0, help_text=_("Tax rate (0–1)"))
@@ -69,6 +72,9 @@ class OrderTax(CommonModel):
 
 
 class OrderItem(ItemCommonModel):
+    """
+    OrderItem model with relation to Order to keep track of items in the order.
+    """
     order = models.ForeignKey("orders.Order", on_delete=models.CASCADE, related_name="order_items")
 
     def __str__(self):
@@ -101,25 +107,11 @@ class Order(CommonModel):
         related_name="orders",
         verbose_name=_("Cart")
     )
-    shipping_class = models.ForeignKey(
-        ShippingClass,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="orders",
-        verbose_name=_("Shipping Class")
-    )
     total_amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         default=0.00,
         verbose_name=_("Total Amount")
-    )
-    shipping_address = models.ForeignKey(
-        "users.ShippingAddress",
-        on_delete=models.SET_NULL,
-        related_name="orders",
-        verbose_name=_("Shipping Address")
     )
     status = models.CharField(
         max_length = 20,
@@ -138,7 +130,6 @@ class Order(CommonModel):
         indexes = CommonModel.Meta.indexes + [
             models.Index(fields=['user', 'is_deleted']),
             models.Index(fields=['cart', 'is_deleted']),
-            models.Index(fields=['shipping_class', 'is_deleted']),
             models.Index(fields=['status', 'is_deleted']),
             models.Index(fields=['total_amount', 'is_deleted']),
 

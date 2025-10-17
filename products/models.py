@@ -1,15 +1,15 @@
 import logging
 from datetime import timezone, timedelta
 from decimal import Decimal
+from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.safestring import mark_safe
-from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
-from common.models import CommonModel
-from common.utils import generate_unique_slug
+from common.models import CommonModel, SlugFieldCommonModel
+from orders.models import OrderItem
 from products.enums import (ProductCondition, ProductStatus,
                             StockStatus, ProductLabel,
                             ServiceType, ProductType)
@@ -46,7 +46,7 @@ class ProductVariant(CommonModel):
     """
     objects = ProductVariantManager()
 
-    product = models.ForeignKey("Product", on_delete=models.CASCADE, related_name="variants")
+    product = models.ForeignKey("Product", on_delete=models.CASCADE, related_name="product_variants")
     sku = models.CharField(
         max_length=100,
         unique=True,
@@ -191,12 +191,12 @@ class ProductImage(CommonModel):
         ]
 
 
-class Product(CommonModel):
+class Product(SlugFieldCommonModel):
     """
     Abstract base product model with common fields and methods.
     Specialized product types should inherit from this.
     """
-
+    slug_fields = ['product_name', 'uuid']
     objects = ProductManager()
     reports = ProductReportManager()
     admin = ProductAdminManager()
@@ -224,19 +224,20 @@ class Product(CommonModel):
         verbose_name=_("Product Name"),
         help_text=_("Name of the product as displayed to customers")
     )
-    slug = models.SlugField(
-        unique=True,
-        max_length=255,
-        blank=True,
-        verbose_name=_("URL Slug"),
-        help_text=_("Unique URL-friendly identifier for the product")
-    )
+
     category = models.ForeignKey(
         "category.Category",
         on_delete=models.CASCADE,
         related_name="products",
         verbose_name=_("Category"),
         help_text=_("Main category for organizing products")
+    )
+    subcategories = models.ManyToManyField(
+        "category.Category",
+        related_name="products_subcategories",
+        blank=True,
+        verbose_name=_("Subcategories"),
+        help_text=_("Optional secondary categories for this product")
     )
 
     # Core product information
@@ -363,31 +364,9 @@ class Product(CommonModel):
 
         super().save(*args, **kwargs)
 
-        # Generate unique slug ONLY if slug is empty AND we have product_name
-        # Do this only after the first save to ensure UUID is available
-        if not self.slug and self.product_name:
-            self._generate_and_set_slug()
-
     def delete(self, *args, **kwargs):
         self.status = ProductStatus.DELETED
         super().delete(*args, **kwargs)
-
-    def _generate_and_set_slug(self):
-        """Generate and set slug without causing infinite save loop"""
-        generated_slug = generate_unique_slug(Product, self, fields_to_slugify=["product_name"])
-
-        if generated_slug:
-            # Use update() to avoid recursive save
-            Product.objects.filter(pk=self.pk).update(slug=generated_slug)
-            # Update the current instance
-            self.slug = generated_slug
-        else:
-            # Fallback slug generation using UUID
-            fallback_slug = slugify(f"product-{self.uuid}")
-            Product.objects.filter(pk=self.pk).update(slug=fallback_slug)
-            self.slug = fallback_slug
-
-        logger.info(f"Set slug '{self.slug}' for product {self.pk}")
 
     def _can_calculate_cost_price(self):
         """Check if we have enough data to estimate cost price"""
@@ -633,48 +612,47 @@ class Product(CommonModel):
         return f"{self.product_name} ({self.get_product_type_display()})"
 
     class Meta:
-        abstract = True
         ordering = ['product_name']
-        indexes = CommonModel.Meta.indexes + [
+        indexes = [
             # Core product identity
-            models.Index(fields=['slug', 'is_deleted']),
-            models.Index(fields=['product_name', 'is_deleted']),
+            models.Index(fields=['product_name'], name='prod_name_idx'),
 
             # Category navigation
-            models.Index(fields=['category', 'is_deleted']),
-            models.Index(fields=['category', 'status', 'is_deleted']),
-            models.Index(fields=['category', 'product_type', 'is_deleted']),
+            models.Index(fields=['category'], name='prod_category_idx'),
+            models.Index(fields=['category', 'status'], name='prod_category_status_idx'),
+            models.Index(fields=['category', 'product_type'], name='prod_category_type_idx'),
 
             # Price and financial queries
-            models.Index(fields=['price', 'is_deleted']),
-            models.Index(fields=['price', 'category', 'is_deleted']),
-            models.Index(fields=['compare_at_price', 'is_deleted']),
-            models.Index(fields=['cost_price', 'is_deleted']),
+            models.Index(fields=['price'], name='prod_price_idx'),
+            models.Index(fields=['price', 'category'], name='prod_price_category_idx'),
+            models.Index(fields=['compare_at_price'], name='prod_compare_price_idx'),
+            models.Index(fields=['cost_price'], name='prod_cost_price_idx'),
 
             # Status-based filtering
-            models.Index(fields=['status', 'is_deleted']),
-            models.Index(fields=['stock_status', 'is_deleted']),
-            models.Index(fields=['condition', 'is_deleted']),
-            models.Index(fields=['label', 'is_deleted']),
-            models.Index(fields=['product_type', 'is_deleted']),
+            models.Index(fields=['status'], name='prod_status_idx'),
+            models.Index(fields=['stock_status'], name='prod_stock_status_idx'),
+            models.Index(fields=['condition'], name='prod_condition_idx'),
+            models.Index(fields=['label'], name='prod_label_idx'),
+            models.Index(fields=['product_type'], name='prod_type_idx'),
 
             # Inventory management
-            models.Index(fields=['stock_quantity', 'is_deleted']),
-            models.Index(fields=['stock_status', 'stock_quantity', 'is_deleted']),
+            models.Index(fields=['stock_quantity'], name='prod_stock_qty_idx'),
+            models.Index(fields=['stock_status', 'stock_quantity'], name='prod_stock_qty_status_idx'),
 
             # Marketing and promotions
-            models.Index(fields=['label', 'status', 'is_deleted']),
-            models.Index(fields=['is_deleted', 'label', 'status']),
+            models.Index(fields=['label', 'status'], name='prod_label_status_idx'),
 
             # Time-based features
-            models.Index(fields=['sale_start_date', 'sale_end_date', 'is_deleted']),
-            models.Index(fields=['featured_until', 'is_deleted']),
-            models.Index(fields=['date_created', 'is_deleted']),
+            models.Index(fields=['sale_start_date', 'sale_end_date'], name='prod_sale_dates_idx'),
+            models.Index(fields=['featured_until'], name='prod_featured_until_idx'),
 
-            # Composite queries for catalog
-            models.Index(fields=['status', 'stock_status', 'category', 'is_deleted']),
-            models.Index(fields=['status', 'product_type', 'category', 'is_deleted']),
-            models.Index(fields=['status', 'price', 'category', 'is_deleted']),
+            # Composite queries
+            models.Index(fields=['status', 'stock_status', 'category'], name='prod_status_stock_category_idx'),
+            models.Index(fields=['status', 'product_type', 'category'], name='prod_status_type_category_idx'),
+            models.Index(fields=['status', 'price', 'category'], name='prod_status_price_category_idx'),
+
+            models.Index(fields=['slug'], name='prod_slug_idx'),
+            models.Index(fields=['category', 'slug'], name='prod_category_slug_idx'),
         ]
         constraints = [
             models.CheckConstraint(check=models.Q(price__gt=0), name="non_negative_greater_than_zero_price"),
@@ -709,7 +687,7 @@ class Product(CommonModel):
             ),
             models.CheckConstraint(
                 check=~models.Q(pk=models.F('parent_id')),
-                name='prevent_self_parent_reference'
+                name='prevent_self_parent_reference_for_product'
             )
         ]
 
@@ -736,14 +714,6 @@ class PhysicalProduct(Product):
         default=True,
         verbose_name=_("Requires Shipping"),
         help_text=_("Whether this product requires physical shipping or is pickup-only")
-    )
-    shipping_class = models.ForeignKey(
-        'shipping.ShippingClass',
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        verbose_name=_("Shipping Class"),
-        help_text=_("Shipping class used for calculating shipping rates and delivery times")
     )
     fragile = models.BooleanField(
         default=False,
@@ -893,7 +863,7 @@ class PhysicalProduct(Product):
             'days_until_expiry': self.days_until_expiry,
         }
 
-    def get_delivery_info(self):
+    def get_delivery_info(self) -> dict[str, Any]:
         """Get comprehensive delivery information for physical product"""
         base_info = {
             'product_id': self.uuid,
@@ -912,7 +882,6 @@ class PhysicalProduct(Product):
             'dimensions': self.dimensions,
             'fragile': self.fragile,
             'hazardous': self.hazardous,
-            'shipping_class': str(self.shipping_class) if self.shipping_class else None,
             'estimated_delivery': self.get_estimated_delivery_time(),
             'delivery_type': 'shipping',
             'is_expired': self.is_expired,
@@ -921,10 +890,41 @@ class PhysicalProduct(Product):
         return base_info
 
     def get_estimated_delivery_time(self) -> str:
-        """Calculate estimated delivery time based on shipping class"""
-        if self.shipping_class and hasattr(self.shipping_class, 'get_estimated_delivery'):
-            return self.shipping_class.get_estimated_delivery()
-        return "5-7 business days"  # Default fallback
+        """Calculate estimated delivery time based on shipping class or similar products."""
+
+        # Try to find a previous order for this exact product
+        order_item = (
+            OrderItem.objects
+            .filter(product__uuid=self.uuid)
+            .select_related('order__shipping_class')
+            .order_by('-order__date_created')
+            .first()
+        )
+
+        # If no exact match, try to find a similar product
+        if not order_item:
+            order_item = (
+                OrderItem.objects
+                .filter(
+                    product__category=self.category,
+                    product__hazardous=self.hazardous,
+                    product__fragile=self.fragile,
+                    product__requires_shipping=self.requires_shipping,
+                    product__weight=self.weight,
+                    product__dimensions=self.dimensions,
+                    product__product_type=self.product_type,
+                )
+                .select_related('order__shipping_class')
+                .order_by('-order__date_created')
+                .first()
+            )
+
+        # If we found a related order, return its estimated time
+        if order_item and getattr(order_item.order, "shipping_class", None):
+            return order_item.order.shipping_class.get_estimated_delivery_time()
+
+        # Default fallback if no prior data
+        return "5–7 business days"
 
     def validate_purchase(self, quantity: int = 1, color=None, size=None):
         """
@@ -986,48 +986,37 @@ class PhysicalProduct(Product):
         db_table = "physical_products"
         verbose_name = _("Physical Product")
         verbose_name_plural = _("Physical Products")
-        indexes = Product.Meta.indexes + [
+        indexes = [
             # Inventory & SKU indexes
-            models.Index(fields=['sku', 'is_deleted']),
-            models.Index(fields=['barcode', 'is_deleted']),
-            models.Index(fields=['track_inventory', 'is_deleted']),
+            models.Index(fields=['sku'], name='pp_sku_idx'),
+            models.Index(fields=['barcode'], name='pp_barcode_idx'),
 
             # Manufacturing indexes
-            models.Index(fields=['manufacturing_date', 'is_deleted']),
-            models.Index(fields=['manufacturing_location', 'is_deleted']),
-            models.Index(fields=['batch_number', 'is_deleted']),
+            models.Index(fields=['manufacturing_date'], name='pp_mfg_date_idx'),
+            models.Index(fields=['manufacturing_location'], name='pp_mfg_location_idx'),
+            models.Index(fields=['batch_number'], name='pp_batch_number_idx'),
 
             # Shipping & logistics indexes
-            models.Index(fields=['requires_shipping', 'is_deleted']),
-            models.Index(fields=['shipping_class', 'is_deleted']),
-            models.Index(fields=['weight', 'is_deleted']),
-            models.Index(fields=['fragile', 'is_deleted']),
-            models.Index(fields=['hazardous', 'is_deleted']),
+            models.Index(fields=['requires_shipping'], name='pp_requires_shipping_idx'),
+            models.Index(fields=['weight'], name='pp_weight_idx'),
+            models.Index(fields=['fragile'], name='pp_fragile_idx'),
+            models.Index(fields=['hazardous'], name='pp_hazardous_idx'),
 
             # Composite manufacturing indexes
-            models.Index(fields=['manufacturing_date', 'manufacturing_location', 'is_deleted']),
-            models.Index(fields=['batch_number', 'manufacturing_date', 'is_deleted']),
+            models.Index(fields=['manufacturing_date', 'manufacturing_location'], name='pp_mfg_date_location_idx'),
+            models.Index(fields=['batch_number', 'manufacturing_date'], name='pp_batch_mfg_date_idx'),
 
             # Cost analysis indexes
-            models.Index(fields=['manufacturing_cost', 'is_deleted']),
+            models.Index(fields=['manufacturing_cost'], name='pp_mfg_cost_idx'),
         ]
         constraints = [
-            models.CheckConstraint(check=models.Q(weight__gte=0), name="non_negative_weight"),
-            models.CheckConstraint(check=models.Q(manufacturing_cost__gte=0), name="non_negative_manufacturing_cost"),
-            models.CheckConstraint(check=models.Q(packaging_cost__gte=0), name="non_negative_packaging_cost"),
-            models.CheckConstraint(check=models.Q(packaging_cost__gte=0), name="non_negative_packaging_cost"),
-            models.CheckConstraint(check=models.Q(shipping_to_warehouse_cost__gte=0), name="non_negative_shipping_to_warehouse_cost"),
-
-            # Shelf life cannot be negative or zero
+            models.CheckConstraint(check=models.Q(weight__gte=0), name="pp_non_negative_weight"),
+            models.CheckConstraint(check=models.Q(manufacturing_cost__gte=0), name="pp_non_negative_mfg_cost"),
+            models.CheckConstraint(check=models.Q(packaging_cost__gte=0), name="pp_non_negative_packaging_cost"),
+            models.CheckConstraint(check=models.Q(shipping_to_warehouse_cost__gte=0), name="pp_non_negative_ship_cost"),
             models.CheckConstraint(
-                check=models.Q(shelf_life__gt=0) | models.Q(shelf_life__isnull=True),
-                name="positive_shelf_life"
-            ),
-
-            # Ensure SKU uniqueness scoped to non-deleted items
-            models.UniqueConstraint(
-                fields=['sku', 'is_deleted'],
-                name='unique_sku_non_deleted'
+                check=models.Q(shelf_life__gt=timedelta(seconds=0)) | models.Q(shelf_life__isnull=True),
+                name="pp_positive_shelf_life"
             ),
         ]
 
@@ -1145,30 +1134,30 @@ class DigitalProduct(Product):
         db_table = "digital_products"
         verbose_name = _("Digital Product")
         verbose_name_plural = _("Digital Products")
-        indexes = Product.Meta.indexes + [
-            # File properties indexes
-            models.Index(fields=['file_type', 'is_deleted']),
-            models.Index(fields=['file_size', 'is_deleted']),
-            models.Index(fields=['download_limit', 'is_deleted']),
-            models.Index(fields=['access_duration', 'is_deleted']),
+        indexes = [
+            # File properties
+            models.Index(fields=['file_type'], name='dp_file_type_idx'),
+            models.Index(fields=['file_size'], name='dp_file_size_idx'),
+            models.Index(fields=['download_limit'], name='dp_download_limit_idx'),
+            models.Index(fields=['access_duration'], name='dp_access_duration_idx'),
 
-            # Digital delivery indexes
-            models.Index(fields=['file_type', 'file_size', 'is_deleted']),
-            models.Index(fields=['download_limit', 'access_duration', 'is_deleted']),
-
-            # Content management indexes
-            models.Index(fields=['file_type', 'status', 'is_deleted']),
-            models.Index(fields=['file_size', 'file_type', 'is_deleted']),
-
-            # License & access management
-            models.Index(fields=['download_limit', 'status', 'is_deleted']),
-            models.Index(fields=['access_duration', 'status', 'is_deleted']),
+            # Composite properties
+            models.Index(fields=['file_type', 'file_size'], name='dp_file_type_size_idx'),
+            models.Index(fields=['download_limit', 'access_duration'], name='dp_download_access_idx'),
         ]
         constraints = [
-            models.CheckConstraint(check=models.Q(download_limit__gte=1), name="non_negative_greater_than_1_download_limit"),
-            models.CheckConstraint(check=models.Q(file_size__gte=0) | models.Q(file_size__isnull=True),
-                                   name="non_negative_file_size"),
-            models.CheckConstraint(check=models.Q(access_duration__gte=0), name="non_negative_access_duration"),
+            models.CheckConstraint(
+                check=models.Q(download_limit__gte=1),
+                name="dp_min_download_limit"
+            ),
+            models.CheckConstraint(
+                check=models.Q(file_size__gte=0) | models.Q(file_size__isnull=True),
+                name="dp_non_negative_file_size"
+            ),
+            models.CheckConstraint(
+                check=models.Q(access_duration__gte=timedelta(seconds=0)),
+                name="dp_non_negative_access_duration"
+            ),
         ]
 
 
@@ -1285,19 +1274,27 @@ class ServiceProduct(Product):
         verbose_name = _("Service")
         verbose_name_plural = _("Services")
         ordering = ["service_type"]
-        indexes = Product.Meta.indexes + [
-            # Service type indexes
-            models.Index(fields=['service_type', 'is_deleted']),
-            models.Index(fields=['duration', 'is_deleted']),
-            models.Index(fields=['location_required', 'is_deleted']),
+        indexes = [
+            # Service properties
+            models.Index(fields=['service_type'], name='sp_service_type_idx'),
+            models.Index(fields=['duration'], name='sp_duration_idx'),
+            models.Index(fields=['location_required'], name='sp_location_required_idx'),
 
-            # Service delivery indexes
-            models.Index(fields=['service_type', 'duration', 'is_deleted']),
-            models.Index(fields=['service_type', 'location_required', 'is_deleted']),
-            models.Index(fields=['duration', 'location_required', 'is_deleted']),
-
-            # Service scheduling & availability
-            models.Index(fields=['service_type', 'status', 'is_deleted']),
-            models.Index(fields=['duration', 'status', 'is_deleted']),
-            models.Index(fields=['location_required', 'status', 'is_deleted']),
+            # Combinations
+            models.Index(fields=['service_type', 'duration'], name='sp_service_type_duration_idx'),
+            models.Index(fields=['service_type', 'location_required'], name='sp_service_type_loc_idx'),
+            models.Index(fields=['duration', 'location_required'], name='sp_duration_loc_idx'),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(duration__gte=timedelta(minutes=5)),
+                name="sp_min_duration_5m"
+            ),
+            models.CheckConstraint(
+                check=(
+                        models.Q(location_required=False) |
+                        models.Q(location__isnull=False)
+                ),
+                name="sp_location_required_with_location"
+            )
         ]

@@ -10,6 +10,9 @@ from .enums import CART_STATUSES
 
 
 class Coupon(CommonModel):
+    """
+    Coupon model with relation to Cart to keep track of coupons in the cart.
+    """
     objects = NonExpiredOrDeletedCouponManager()
 
     coupon_code = models.CharField(max_length=10)
@@ -112,6 +115,9 @@ class Cart(CommonModel):
 
 
 class CartItem(ItemCommonModel):
+    """
+    CartItem model with relation to Cart to keep track of items in the cart.
+    """
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="cart_items")
 
     def __str__(self):
@@ -123,7 +129,7 @@ class CartItem(ItemCommonModel):
         verbose_name = "Cart Item"
         verbose_name_plural = "Cart Items"
         ordering = ["-date_created"]
-        indexes = ItemCommonModel.Meta.indexes + [
+        indexes = [
             models.Index(fields=["cart", "is_deleted"]),  # Manager pattern
             models.Index(fields=["cart", "product", "is_deleted"]),  # Product's carts by status
         ]
