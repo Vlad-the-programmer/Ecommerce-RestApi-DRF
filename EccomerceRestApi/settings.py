@@ -52,6 +52,8 @@ INSTALLED_APPS = [
     'shipping.apps.ShippingConfig',
     'orders.apps.OrdersConfig',
     'category.apps.CategoryConfig',
+    'reviews.apps.ReviewsConfig',
+    'wishlist.apps.WishlistConfig',
 ]
 
 MIDDLEWARE = [

@@ -5,6 +5,7 @@ from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Avg
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 
@@ -16,6 +17,8 @@ from products.enums import (ProductCondition, ProductStatus,
 from products.managers import (ProductManager, ProductReportManager,
                                ProductAdminManager, ProductVariantManager)
 from common.models import Address
+from reviews.utils import get_stars_for_rating
+
 
 logger = logging.getLogger(__name__)
 
@@ -342,6 +345,169 @@ class Product(SlugFieldCommonModel):
         help_text=_("Enable inventory tracking and stock level management")
     )
 
+    # Physical product that requires shipping
+    weight = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name=_("Weight"),
+        help_text=_("Product weight in kilograms (kg) for shipping calculations")
+    )
+    dimensions = models.CharField(
+        max_length=100,
+        blank=True,
+        verbose_name=_("Dimensions"),
+        help_text=_("Product dimensions in centimeters. Format: Length×Width×Height (e.g., 30×20×10)")
+    )
+    requires_shipping = models.BooleanField(
+        default=True,
+        verbose_name=_("Requires Shipping"),
+        help_text=_("Whether this product requires physical shipping or is pickup-only")
+    )
+    fragile = models.BooleanField(
+        default=False,
+        verbose_name=_("Fragile Item"),
+        help_text=_("Whether this product requires special fragile handling during shipping")
+    )
+    hazardous = models.BooleanField(
+        default=False,
+        verbose_name=_("Hazardous Material"),
+        help_text=_("Whether this product contains hazardous materials requiring special shipping")
+    )
+
+    # Inventory tracking
+    sku = models.CharField(
+        max_length=100,
+        unique=True,
+        null=True,
+        blank=True,
+        verbose_name=_("SKU"),
+        help_text=_("Stock Keeping Unit - unique identifier for inventory management")
+    )
+    barcode = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        verbose_name=_("Barcode"),
+        help_text=_("Barcode number (UPC, EAN, ISBN) for scanning and inventory tracking")
+    )
+
+    # Manufacturing fields
+    manufacturing_cost = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name=_("Manufacturing Cost"),
+        help_text=_("Direct cost of manufacturing this product (materials, labor, overhead)")
+    )
+    packaging_cost = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        default=0.0,
+        verbose_name=_("Packaging Cost"),
+        help_text=_("Cost of packaging materials for this product")
+    )
+    shipping_to_warehouse_cost = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        default=0.0,
+        verbose_name=_("Shipping to Warehouse Cost"),
+        help_text=_("Cost to ship this product from manufacturer to your warehouse")
+    )
+    manufacturing_location = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        verbose_name=_("Manufacturing Location"),
+        help_text=_("Location where this product is manufactured (country, city, or factory)")
+    )
+    manufacturing_date = models.DateField(
+        blank=True,
+        null=True,
+        verbose_name=_("Manufacturing Date"),
+        help_text=_("Date when this product was manufactured or produced")
+    )
+    batch_number = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        verbose_name=_("Batch Number"),
+        help_text=_("Manufacturing batch or lot number for quality control")
+    )
+    shelf_life = models.DurationField(
+        blank=True,
+        null=True,
+        verbose_name=_("Shelf Life"),
+        help_text=_("How long this product remains usable or sellable after manufacturing")
+    )
+
+    # Digital product delivered via download
+    download_file = models.FileField(
+        upload_to='digital_products/',
+        null=True, blank=True,
+        verbose_name=_("Download File"),
+        help_text=_("Digital file for customer download")
+    )
+    download_limit = models.PositiveIntegerField(
+        default=1,
+        verbose_name=_("Download Limit"),
+        help_text=_("Number of times the file can be downloaded")
+    )
+    access_duration = models.DurationField(
+        null=True, blank=True,
+        verbose_name=_("Access Duration"),
+        help_text=_("How long customers have access (e.g., 30 days)")
+    )
+    file_size = models.PositiveBigIntegerField(
+        null=True, blank=True,
+        verbose_name=_("File Size"),
+        help_text=_("File size in bytes")
+    )
+    file_type = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name=_("File Type"),
+        help_text=_("File format type (e.g., PDF, MP4, ZIP)")
+    )
+    # Service - based product (consulting, repairs, etc.)
+    duration = models.DurationField(
+        null=True, blank=True,
+        verbose_name=_("Service Duration"),
+        help_text=_("Expected service duration")
+    )
+    location_required = models.BooleanField(
+        default=False,
+        verbose_name=_("Location Required"),
+        help_text=_("Whether the service requires physical location access")
+    )
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name=_("Location"),
+        help_text=_("Location where the service is provided"),
+        related_name='service_products'
+    )
+    service_type = models.CharField(
+        max_length=50,
+        choices=ServiceType.choices,
+        default=ServiceType.CONSULTATION,
+        verbose_name=_("Service Type"),
+        help_text=_("Type of service being offered")
+    )
+    provider_notes = models.TextField(
+        blank=True,
+        verbose_name=_("Provider Notes"),
+        help_text=_("Internal notes for service providers")
+    )
+
     def save(self, *args, **kwargs):
 
         # Auto-update stock_status based on variants or direct quantity
@@ -358,6 +524,11 @@ class Product(SlugFieldCommonModel):
 
             self.stock_status = StockStatus.IN_STOCK if total_stock > 0 else StockStatus.OUT_OF_STOCK
 
+        # Set stock status for digital products
+        if not self.track_inventory:
+            self.stock_quantity = 999999  # Practical "unlimited" for gigital products
+            self.stock_status = StockStatus.IN_STOCK
+
         # Calculate cost price if not set and we have sufficient data
         if not self.cost_price and self._can_calculate_cost_price():
             self.cost_price = self._calculate_estimated_cost_price()
@@ -368,13 +539,157 @@ class Product(SlugFieldCommonModel):
         self.status = ProductStatus.DELETED
         super().delete(*args, **kwargs)
 
-    def _can_calculate_cost_price(self):
-        """Check if we have enough data to estimate cost price"""
-        return False
+    def _can_calculate_cost_price(self) -> bool:
+        """
+        Check if we have enough manufacturing data to estimate cost price.
+        Overrides the base class method.
+        """
+        return self.manufacturing_cost is not None and self.manufacturing_cost > 0
 
-    def _calculate_estimated_cost_price(self):
-        """Calculate estimated cost price based on available data"""
-        return Decimal('0.0')
+    def _calculate_estimated_cost_price(self) -> Decimal:
+        """
+        Calculate estimated cost price based on manufacturing data.
+        Overrides the base class method.
+
+        Formula: manufacturing_cost + packaging_cost + shipping_to_warehouse_cost
+        """
+        base_cost = self.manufacturing_cost or Decimal('0.0')
+        packaging = self.packaging_cost or Decimal('0.0')
+        shipping = self.shipping_to_warehouse_cost or Decimal('0.0')
+
+        total_cost = base_cost + packaging + shipping
+
+        # Add a small margin for handling and storage if we have basic data
+        if base_cost > 0:
+            total_cost *= Decimal('1.05')  # 5% handling/storage margin
+
+        return total_cost.quantize(Decimal('0.01'))  # Round to 2 decimal places
+
+    @property
+    def total_manufacturing_cost(self) -> Decimal:
+        """Get total manufacturing-related costs"""
+        return self._calculate_estimated_cost_price()
+
+    @property
+    def is_expired(self) -> bool:
+        """Check if product has expired based on manufacturing date and shelf life"""
+        if not self.manufacturing_date or not self.shelf_life:
+            return False
+
+        from django.utils import timezone
+        expiration_date = self.manufacturing_date + self.shelf_life
+        return timezone.now().date() > expiration_date
+
+    @property
+    def days_until_expiry(self) -> int:
+        """Get number of days until product expires"""
+        if not self.manufacturing_date or not self.shelf_life:
+            return None
+
+        from django.utils import timezone
+        expiration_date = self.manufacturing_date + self.shelf_life
+        today = timezone.now().date()
+        return (expiration_date - today).days
+
+    def get_manufacturing_info(self) -> dict:
+        """Get comprehensive manufacturing information"""
+        return {
+            'manufacturing_cost': float(self.manufacturing_cost) if self.manufacturing_cost else None,
+            'packaging_cost': float(self.packaging_cost) if self.packaging_cost else None,
+            'shipping_to_warehouse_cost': float(
+                self.shipping_to_warehouse_cost) if self.shipping_to_warehouse_cost else None,
+            'total_cost': float(self.total_manufacturing_cost),
+            'manufacturing_location': self.manufacturing_location,
+            'manufacturing_date': self.manufacturing_date,
+            'batch_number': self.batch_number,
+            'shelf_life_days': self.shelf_life.days if self.shelf_life else None,
+            'is_expired': self.is_expired,
+            'days_until_expiry': self.days_until_expiry,
+        }
+
+    def get_delivery_info(self) -> dict[str, Any]:
+        """Get comprehensive delivery information for physical product"""
+        base_info = {
+            'product_id': self.uuid,
+            'product_name': self.product_name,
+            'product_type': self.get_product_type_display(),
+            'price': float(self.price),
+            'stock_status': self.get_stock_status_display(),
+            'available_variants': self.get_available_variants_info(),
+            'price_range': self.get_variant_price_range(),
+            'requires_shipping': self.requires_shipping,
+        }
+
+        match self.product_type:
+            case ProductType.PHYSICAL:
+                # Add physical product specific delivery info
+                base_info.update({
+                    'delivery_type': 'shipping',
+                    'weight': float(self.weight) if self.weight else None,
+                    'dimensions': self.dimensions,
+                    'fragile': self.fragile,
+                    'hazardous': self.hazardous,
+                    'estimated_delivery': self.get_estimated_delivery_time(),
+                    'is_expired': self.is_expired,
+                    'days_until_expiry': self.days_until_expiry,
+                })
+            case ProductType.DIGITAL:
+                # Add digital product specific delivery info
+                base_info.update({
+                    'delivery_type': 'download',
+                    'file_size': self.file_size,
+                    'file_type': self.file_type,
+                    'download_limit': self.download_limit,
+                    'access_duration_days': self.access_duration.days if self.access_duration else None,
+                    'instant_delivery': True,
+                })
+            case ProductType.SERVICE:
+                # Add service product specific delivery info
+                base_info.update({
+                    'delivery_type': 'service',
+                    'duration_hours': self.duration.total_seconds() / 3600 if self.duration else None,
+                    'location_required': self.location_required,
+                    'service_type': self.service_type,
+                    'service_category': self.get_service_type_display(),
+                })
+        return base_info
+
+    def get_estimated_delivery_time(self) -> str:
+        """Calculate estimated delivery time based on shipping class or similar products."""
+
+        # Try to find a previous order for this exact product
+        order_item = (
+            OrderItem.objects
+            .filter(product__uuid=self.uuid)
+            .select_related('order__shipping_class')
+            .order_by('-order__date_created')
+            .first()
+        )
+
+        # If no exact match, try to find a similar product
+        if not order_item:
+            order_item = (
+                OrderItem.objects
+                .filter(
+                    product__category=self.category,
+                    product__hazardous=self.hazardous,
+                    product__fragile=self.fragile,
+                    product__requires_shipping=self.requires_shipping,
+                    product__weight=self.weight,
+                    product__dimensions=self.dimensions,
+                    product__product_type=self.product_type,
+                )
+                .select_related('order__shipping_class')
+                .order_by('-order__date_created')
+                .first()
+            )
+
+        # If we found a related order, return its estimated time
+        if order_item and getattr(order_item.order, "shipping_class", None):
+            return order_item.order.shipping_class.get_estimated_delivery_time()
+
+        # Default fallback if no prior data
+        return "5–7 business days"
 
     @property
     def profit_margin(self):
@@ -600,331 +915,15 @@ class Product(SlugFieldCommonModel):
         # No variants at all
         return float(self.price)
 
-    def get_delivery_info(self):
-        """Abstract method to be implemented by subclasses"""
-        raise NotImplementedError("Subclasses must implement get_delivery_info()")
+    def get_rating(self) -> float:
+        return self.reviews.aggregate(Avg('rating'))['rating__avg']
 
-    def validate_purchase(self, quantity=1, color=None, size=None):
-        """Abstract method to validate purchase"""
-        raise NotImplementedError("Subclasses must implement validate_purchase()")
+    def average_rating_in_stars(self) -> str:
+        """Returns a string of stars based on the avarage rating of the product."""
+        avarage_rating = self.get_rating()
+        rating = float(avarage_rating)  # Convert Decimal to float for easier comparison
 
-    def __str__(self) -> str:
-        return f"{self.product_name} ({self.get_product_type_display()})"
-
-    class Meta:
-        ordering = ['product_name']
-        indexes = [
-            # Core product identity
-            models.Index(fields=['product_name'], name='prod_name_idx'),
-
-            # Category navigation
-            models.Index(fields=['category'], name='prod_category_idx'),
-            models.Index(fields=['category', 'status'], name='prod_category_status_idx'),
-            models.Index(fields=['category', 'product_type'], name='prod_category_type_idx'),
-
-            # Price and financial queries
-            models.Index(fields=['price'], name='prod_price_idx'),
-            models.Index(fields=['price', 'category'], name='prod_price_category_idx'),
-            models.Index(fields=['compare_at_price'], name='prod_compare_price_idx'),
-            models.Index(fields=['cost_price'], name='prod_cost_price_idx'),
-
-            # Status-based filtering
-            models.Index(fields=['status'], name='prod_status_idx'),
-            models.Index(fields=['stock_status'], name='prod_stock_status_idx'),
-            models.Index(fields=['condition'], name='prod_condition_idx'),
-            models.Index(fields=['label'], name='prod_label_idx'),
-            models.Index(fields=['product_type'], name='prod_type_idx'),
-
-            # Inventory management
-            models.Index(fields=['stock_quantity'], name='prod_stock_qty_idx'),
-            models.Index(fields=['stock_status', 'stock_quantity'], name='prod_stock_qty_status_idx'),
-
-            # Marketing and promotions
-            models.Index(fields=['label', 'status'], name='prod_label_status_idx'),
-
-            # Time-based features
-            models.Index(fields=['sale_start_date', 'sale_end_date'], name='prod_sale_dates_idx'),
-            models.Index(fields=['featured_until'], name='prod_featured_until_idx'),
-
-            # Composite queries
-            models.Index(fields=['status', 'stock_status', 'category'], name='prod_status_stock_category_idx'),
-            models.Index(fields=['status', 'product_type', 'category'], name='prod_status_type_category_idx'),
-            models.Index(fields=['status', 'price', 'category'], name='prod_status_price_category_idx'),
-
-            models.Index(fields=['slug'], name='prod_slug_idx'),
-            models.Index(fields=['category', 'slug'], name='prod_category_slug_idx'),
-        ]
-        constraints = [
-            models.CheckConstraint(check=models.Q(price__gt=0), name="non_negative_greater_than_zero_price"),
-            models.CheckConstraint(check=models.Q(cost_price__gt=0), name="non_negative_greater_than_zero_cost_price"),
-            models.CheckConstraint(check=models.Q(compare_at_price__gt=0), name="non_negative_greater_than_zero_compare_at_price"),
-
-            models.CheckConstraint(check=models.Q(stock_quantity__gt=0), name="stock_quantity_gt_0"),
-            models.CheckConstraint(check=models.Q(low_stock_threshold__gt=0), name="low_stock_threshold_gt_0"),
-
-            # Compare-at price must be greater than selling price (if both set)
-            models.CheckConstraint(
-                check=(
-                        models.Q(compare_at_price__isnull=True) |
-                        models.Q(price__lt=models.F("compare_at_price"))
-                ),
-                name="compare_at_price_greater_than_price"
-            ),
-
-            # Sale date integrity
-            models.CheckConstraint(
-                check=(
-                        models.Q(sale_end_date__isnull=True) |
-                        models.Q(sale_start_date__isnull=True) |
-                        models.Q(sale_end_date__gte=models.F("sale_start_date"))
-                ),
-                name="valid_sale_date_range"
-            ),
-            # Low stock threshold cannot exceed stock quantity
-            models.CheckConstraint(
-                check=models.Q(low_stock_threshold__lte=models.F("stock_quantity")),
-                name="valid_low_stock_threshold"
-            ),
-            models.CheckConstraint(
-                check=~models.Q(pk=models.F('parent_id')),
-                name='prevent_self_parent_reference_for_product'
-            )
-        ]
-
-
-class PhysicalProduct(Product):
-    """
-    Physical product that requires shipping
-    """
-    weight = models.DecimalField(
-        max_digits=8,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        verbose_name=_("Weight"),
-        help_text=_("Product weight in kilograms (kg) for shipping calculations")
-    )
-    dimensions = models.CharField(
-        max_length=100,
-        blank=True,
-        verbose_name=_("Dimensions"),
-        help_text=_("Product dimensions in centimeters. Format: Length×Width×Height (e.g., 30×20×10)")
-    )
-    requires_shipping = models.BooleanField(
-        default=True,
-        verbose_name=_("Requires Shipping"),
-        help_text=_("Whether this product requires physical shipping or is pickup-only")
-    )
-    fragile = models.BooleanField(
-        default=False,
-        verbose_name=_("Fragile Item"),
-        help_text=_("Whether this product requires special fragile handling during shipping")
-    )
-    hazardous = models.BooleanField(
-        default=False,
-        verbose_name=_("Hazardous Material"),
-        help_text=_("Whether this product contains hazardous materials requiring special shipping")
-    )
-
-    # Inventory tracking
-    sku = models.CharField(
-        max_length=100,
-        unique=True,
-        verbose_name=_("SKU"),
-        help_text=_("Stock Keeping Unit - unique identifier for inventory management")
-    )
-    barcode = models.CharField(
-        max_length=100,
-        blank=True,
-        null=True,
-        verbose_name=_("Barcode"),
-        help_text=_("Barcode number (UPC, EAN, ISBN) for scanning and inventory tracking")
-    )
-
-    # Manufacturing fields
-    manufacturing_cost = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        verbose_name=_("Manufacturing Cost"),
-        help_text=_("Direct cost of manufacturing this product (materials, labor, overhead)")
-    )
-    packaging_cost = models.DecimalField(
-        max_digits=8,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        default=0.0,
-        verbose_name=_("Packaging Cost"),
-        help_text=_("Cost of packaging materials for this product")
-    )
-    shipping_to_warehouse_cost = models.DecimalField(
-        max_digits=8,
-        decimal_places=2,
-        null=True,
-        blank=True,
-        default=0.0,
-        verbose_name=_("Shipping to Warehouse Cost"),
-        help_text=_("Cost to ship this product from manufacturer to your warehouse")
-    )
-    manufacturing_location = models.CharField(
-        max_length=100,
-        blank=True,
-        null=True,
-        verbose_name=_("Manufacturing Location"),
-        help_text=_("Location where this product is manufactured (country, city, or factory)")
-    )
-    manufacturing_date = models.DateField(
-        blank=True,
-        null=True,
-        verbose_name=_("Manufacturing Date"),
-        help_text=_("Date when this product was manufactured or produced")
-    )
-    batch_number = models.CharField(
-        max_length=50,
-        blank=True,
-        null=True,
-        verbose_name=_("Batch Number"),
-        help_text=_("Manufacturing batch or lot number for quality control")
-    )
-    shelf_life = models.DurationField(
-        blank=True,
-        null=True,
-        verbose_name=_("Shelf Life"),
-        help_text=_("How long this product remains usable or sellable after manufacturing")
-    )
-
-    def _can_calculate_cost_price(self) -> bool:
-        """
-        Check if we have enough manufacturing data to estimate cost price.
-        Overrides the base class method.
-        """
-        return self.manufacturing_cost is not None and self.manufacturing_cost > 0
-
-    def _calculate_estimated_cost_price(self) -> Decimal:
-        """
-        Calculate estimated cost price based on manufacturing data.
-        Overrides the base class method.
-
-        Formula: manufacturing_cost + packaging_cost + shipping_to_warehouse_cost
-        """
-        base_cost = self.manufacturing_cost or Decimal('0.0')
-        packaging = self.packaging_cost or Decimal('0.0')
-        shipping = self.shipping_to_warehouse_cost or Decimal('0.0')
-
-        total_cost = base_cost + packaging + shipping
-
-        # Add a small margin for handling and storage if we have basic data
-        if base_cost > 0:
-            total_cost *= Decimal('1.05')  # 5% handling/storage margin
-
-        return total_cost.quantize(Decimal('0.01'))  # Round to 2 decimal places
-
-    @property
-    def total_manufacturing_cost(self) -> Decimal:
-        """Get total manufacturing-related costs"""
-        return self._calculate_estimated_cost_price()
-
-    @property
-    def is_expired(self) -> bool:
-        """Check if product has expired based on manufacturing date and shelf life"""
-        if not self.manufacturing_date or not self.shelf_life:
-            return False
-
-        from django.utils import timezone
-        expiration_date = self.manufacturing_date + self.shelf_life
-        return timezone.now().date() > expiration_date
-
-    @property
-    def days_until_expiry(self) -> int:
-        """Get number of days until product expires"""
-        if not self.manufacturing_date or not self.shelf_life:
-            return None
-
-        from django.utils import timezone
-        expiration_date = self.manufacturing_date + self.shelf_life
-        today = timezone.now().date()
-        return (expiration_date - today).days
-
-    def get_manufacturing_info(self) -> dict:
-        """Get comprehensive manufacturing information"""
-        return {
-            'manufacturing_cost': float(self.manufacturing_cost) if self.manufacturing_cost else None,
-            'packaging_cost': float(self.packaging_cost) if self.packaging_cost else None,
-            'shipping_to_warehouse_cost': float(
-                self.shipping_to_warehouse_cost) if self.shipping_to_warehouse_cost else None,
-            'total_cost': float(self.total_manufacturing_cost),
-            'manufacturing_location': self.manufacturing_location,
-            'manufacturing_date': self.manufacturing_date,
-            'batch_number': self.batch_number,
-            'shelf_life_days': self.shelf_life.days if self.shelf_life else None,
-            'is_expired': self.is_expired,
-            'days_until_expiry': self.days_until_expiry,
-        }
-
-    def get_delivery_info(self) -> dict[str, Any]:
-        """Get comprehensive delivery information for physical product"""
-        base_info = {
-            'product_id': self.uuid,
-            'product_name': self.product_name,
-            'product_type': self.get_product_type_display(),
-            'price': float(self.price),
-            'stock_status': self.get_stock_status_display(),
-            'available_variants': self.get_available_variants_info(),
-            'price_range': self.get_variant_price_range(),
-        }
-
-        # Add physical product specific delivery info
-        base_info.update({
-            'requires_shipping': self.requires_shipping,
-            'weight': float(self.weight) if self.weight else None,
-            'dimensions': self.dimensions,
-            'fragile': self.fragile,
-            'hazardous': self.hazardous,
-            'estimated_delivery': self.get_estimated_delivery_time(),
-            'delivery_type': 'shipping',
-            'is_expired': self.is_expired,
-            'days_until_expiry': self.days_until_expiry,
-        })
-        return base_info
-
-    def get_estimated_delivery_time(self) -> str:
-        """Calculate estimated delivery time based on shipping class or similar products."""
-
-        # Try to find a previous order for this exact product
-        order_item = (
-            OrderItem.objects
-            .filter(product__uuid=self.uuid)
-            .select_related('order__shipping_class')
-            .order_by('-order__date_created')
-            .first()
-        )
-
-        # If no exact match, try to find a similar product
-        if not order_item:
-            order_item = (
-                OrderItem.objects
-                .filter(
-                    product__category=self.category,
-                    product__hazardous=self.hazardous,
-                    product__fragile=self.fragile,
-                    product__requires_shipping=self.requires_shipping,
-                    product__weight=self.weight,
-                    product__dimensions=self.dimensions,
-                    product__product_type=self.product_type,
-                )
-                .select_related('order__shipping_class')
-                .order_by('-order__date_created')
-                .first()
-            )
-
-        # If we found a related order, return its estimated time
-        if order_item and getattr(order_item.order, "shipping_class", None):
-            return order_item.order.shipping_class.get_estimated_delivery_time()
-
-        # Default fallback if no prior data
-        return "5–7 business days"
+        return  get_stars_for_rating(rating)
 
     def validate_purchase(self, quantity: int = 1, color=None, size=None):
         """
@@ -943,6 +942,25 @@ class PhysicalProduct(Product):
             # For example: validate_hazardous_shipping(destination_country)
             # For now, just log or handle as needed
             pass
+
+        if self.has_variants():
+            if color or size:
+                try:
+                    variant = self.variants.get(
+                        color=color,
+                        size=size,
+                        is_deleted=False
+                    )
+                    if variant.stock_quantity < quantity:
+                        raise ValidationError(
+                            _("Insufficient stock for selected variant. Only %(stock)s available.") %
+                            {'stock': variant.stock_quantity}
+                        )
+                except ProductVariant.DoesNotExist:
+                    raise ValidationError(_("Selected variant is not available"))
+            else:
+                raise ValidationError(_("Please select a variant for this product"))
+
 
         return True
 
@@ -976,325 +994,154 @@ class PhysicalProduct(Product):
                 'is_expired': _("This product has expired and cannot be sold.")
             })
 
-    def __str__(self):
-        base_str = super().__str__()
-        if self.sku:
-            return f"{base_str} [{self.sku}]"
-        return base_str
-
-    class Meta:
-        db_table = "physical_products"
-        verbose_name = _("Physical Product")
-        verbose_name_plural = _("Physical Products")
-        indexes = [
-            # Inventory & SKU indexes
-            models.Index(fields=['sku'], name='pp_sku_idx'),
-            models.Index(fields=['barcode'], name='pp_barcode_idx'),
-
-            # Manufacturing indexes
-            models.Index(fields=['manufacturing_date'], name='pp_mfg_date_idx'),
-            models.Index(fields=['manufacturing_location'], name='pp_mfg_location_idx'),
-            models.Index(fields=['batch_number'], name='pp_batch_number_idx'),
-
-            # Shipping & logistics indexes
-            models.Index(fields=['requires_shipping'], name='pp_requires_shipping_idx'),
-            models.Index(fields=['weight'], name='pp_weight_idx'),
-            models.Index(fields=['fragile'], name='pp_fragile_idx'),
-            models.Index(fields=['hazardous'], name='pp_hazardous_idx'),
-
-            # Composite manufacturing indexes
-            models.Index(fields=['manufacturing_date', 'manufacturing_location'], name='pp_mfg_date_location_idx'),
-            models.Index(fields=['batch_number', 'manufacturing_date'], name='pp_batch_mfg_date_idx'),
-
-            # Cost analysis indexes
-            models.Index(fields=['manufacturing_cost'], name='pp_mfg_cost_idx'),
-        ]
-        constraints = [
-            models.CheckConstraint(check=models.Q(weight__gte=0), name="pp_non_negative_weight"),
-            models.CheckConstraint(check=models.Q(manufacturing_cost__gte=0), name="pp_non_negative_mfg_cost"),
-            models.CheckConstraint(check=models.Q(packaging_cost__gte=0), name="pp_non_negative_packaging_cost"),
-            models.CheckConstraint(check=models.Q(shipping_to_warehouse_cost__gte=0), name="pp_non_negative_ship_cost"),
-            models.CheckConstraint(
-                check=models.Q(shelf_life__gt=timedelta(seconds=0)) | models.Q(shelf_life__isnull=True),
-                name="pp_positive_shelf_life"
-            ),
-        ]
-
-
-class DigitalProduct(Product):
-    """
-    Digital product delivered via download
-    """
-    download_file = models.FileField(
-        upload_to='digital_products/',
-        null=True, blank=True,
-        verbose_name=_("Download File"),
-        help_text=_("Digital file for customer download")
-    )
-    download_limit = models.PositiveIntegerField(
-        default=1,
-        verbose_name=_("Download Limit"),
-        help_text=_("Number of times the file can be downloaded")
-    )
-    access_duration = models.DurationField(
-        null=True, blank=True,
-        verbose_name=_("Access Duration"),
-        help_text=_("How long customers have access (e.g., 30 days)")
-    )
-    file_size = models.PositiveBigIntegerField(
-        null=True, blank=True,
-        verbose_name=_("File Size"),
-        help_text=_("File size in bytes")
-    )
-    file_type = models.CharField(
-        max_length=50,
-        blank=True,
-        verbose_name=_("File Type"),
-        help_text=_("File format type (e.g., PDF, MP4, ZIP)")
-    )
-
-    def _can_calculate_cost_price(self) -> bool:
-        """
-        Check if we have enough data to estimate cost price for digital product.
-        Overrides the base class method.
-        """
-        # Digital products might have development costs or platform fees
-        # For now, return False as we don't have specific cost fields
-        return False
-
-    def _calculate_estimated_cost_price(self) -> Decimal:
-        """
-        Calculate estimated cost price for digital product.
-        Overrides the base class method.
-        """
-        # Digital products: development_cost / expected_sales + platform_fees
-        # For now, return 0 as we don't have specific cost fields
-        return Decimal('0.0')
-
-    def get_delivery_info(self):
-        """Get delivery information for digital product"""
-        return {
-            'product_id': self.uuid,
-            'product_name': self.product_name,
-            'product_type': self.get_product_type_display(),
-            'price': float(self.price),
-            'stock_status': self.get_stock_status_display(),
-            'available_variants': self.get_available_variants_info(),
-            'price_range': self.get_variant_price_range(),
-            'delivery_type': 'download',
-            'file_size': self.file_size,
-            'file_type': self.file_type,
-            'download_limit': self.download_limit,
-            'access_duration_days': self.access_duration.days if self.access_duration else None,
-            'instant_delivery': True,
-        }
-
-    def validate_purchase(self, quantity=1, color=None, size=None):
-        """
-        Validate if this digital product can be purchased.
-        Overrides the base class method.
-        """
-        # Digital products typically don't have quantity limits for the product itself
-        # But we still need to validate variants if they exist
-        if self.has_variants():
-            if color or size:
-                try:
-                    variant = self.variants.get(
-                        color=color,
-                        size=size,
-                        is_deleted=False
-                    )
-                    if variant.stock_quantity < quantity:
-                        raise ValidationError(
-                            _("Insufficient stock for selected variant. Only %(stock)s available.") %
-                            {'stock': variant.stock_quantity}
-                        )
-                except ProductVariant.DoesNotExist:
-                    raise ValidationError(_("Selected variant is not available"))
-            else:
-                raise ValidationError(_("Please select a variant for this product"))
-
-        # Digital products don't have traditional stock limits for the base product
-        return True
-
-    def clean(self):
-        super().clean()
-
+        # Validate access duration for digital products
         if self.access_duration is not None and self.access_duration < timedelta(days=1):
             raise ValidationError(_("Access duration must be at least 1 day"))
 
-    # For digital products, stock is often unlimited
-    def save(self, *args, **kwargs):
-        if not self.track_inventory:
-            self.stock_quantity = 999999  # Practical "unlimited"
-            self.stock_status = StockStatus.IN_STOCK
-        super().save(*args, **kwargs)
-
-    class Meta:
-        db_table = "digital_products"
-        verbose_name = _("Digital Product")
-        verbose_name_plural = _("Digital Products")
-        indexes = [
-            # File properties
-            models.Index(fields=['file_type'], name='dp_file_type_idx'),
-            models.Index(fields=['file_size'], name='dp_file_size_idx'),
-            models.Index(fields=['download_limit'], name='dp_download_limit_idx'),
-            models.Index(fields=['access_duration'], name='dp_access_duration_idx'),
-
-            # Composite properties
-            models.Index(fields=['file_type', 'file_size'], name='dp_file_type_size_idx'),
-            models.Index(fields=['download_limit', 'access_duration'], name='dp_download_access_idx'),
-        ]
-        constraints = [
-            models.CheckConstraint(
-                check=models.Q(download_limit__gte=1),
-                name="dp_min_download_limit"
-            ),
-            models.CheckConstraint(
-                check=models.Q(file_size__gte=0) | models.Q(file_size__isnull=True),
-                name="dp_non_negative_file_size"
-            ),
-            models.CheckConstraint(
-                check=models.Q(access_duration__gte=timedelta(seconds=0)),
-                name="dp_non_negative_access_duration"
-            ),
-        ]
-
-
-class ServiceProduct(Product):
-    """
-    Service-based product (consulting, repairs, etc.)
-    """
-    duration = models.DurationField(
-        verbose_name=_("Service Duration"),
-        help_text=_("Expected service duration")
-    )
-    location_required = models.BooleanField(
-        default=False,
-        verbose_name=_("Location Required"),
-        help_text=_("Whether the service requires physical location access")
-    )
-    location = models.ForeignKey(
-        Location,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        verbose_name=_("Location"),
-        help_text=_("Location where the service is provided"),
-        related_name='service_products'
-    )
-    service_type = models.CharField(
-        max_length=50,
-        choices=ServiceType.choices,
-        default=ServiceType.CONSULTATION,
-        verbose_name=_("Service Type"),
-        help_text=_("Type of service being offered")
-    )
-    provider_notes = models.TextField(
-        blank=True,
-        verbose_name=_("Provider Notes"),
-        help_text=_("Internal notes for service providers")
-    )
-
-    def _can_calculate_cost_price(self) -> bool:
-        """
-        Check if we have enough data to estimate cost price for service.
-        Overrides the base class method.
-        """
-        # Services might have provider costs or material costs
-        # For now, return False as we don't have specific cost fields
-        return False
-
-    def _calculate_estimated_cost_price(self) -> Decimal:
-        """
-        Calculate estimated cost price for service product.
-        Overrides the base class method.
-        """
-        # Services: hourly_rate * estimated_hours + materials
-        # For now, return 0 as we don't have specific cost fields
-        return Decimal('0.0')
-
-    def get_delivery_info(self):
-        """Get delivery information for service product"""
-        return {
-            'product_id': self.uuid,
-            'product_name': self.product_name,
-            'product_type': self.get_product_type_display(),
-            'price': float(self.price),
-            'stock_status': self.get_stock_status_display(),
-            'available_variants': self.get_available_variants_info(),
-            'price_range': self.get_variant_price_range(),
-            'delivery_type': 'service',
-            'duration_hours': self.duration.total_seconds() / 3600 if self.duration else None,
-            'location_required': self.location_required,
-            'service_type': self.service_type,
-            'service_category': self.get_service_type_display(),
-        }
-
-    def validate_purchase(self, quantity=1, color=None, size=None):
-        """
-        Validate if this service product can be purchased.
-        Overrides the base class method.
-        """
-        # Services might have capacity limits or scheduling constraints
-        # For now, we'll just validate variants if they exist
-        if self.has_variants():
-            if color or size:
-                try:
-                    variant = self.variants.get(
-                        color=color,
-                        size=size,
-                        is_deleted=False
-                    )
-                    if variant.stock_quantity < quantity:
-                        raise ValidationError(
-                            _("Insufficient capacity for selected service variant. Only %(stock)s available.") %
-                            {'stock': variant.stock_quantity}
-                        )
-                except ProductVariant.DoesNotExist:
-                    raise ValidationError(_("Selected service variant is not available"))
-            else:
-                raise ValidationError(_("Please select a variant for this service"))
-
-        # Services might have additional validation logic here
-        # For example: check provider availability, scheduling conflicts, etc.
-        return True
-
-    def clean(self):
-        super().clean()
-
+        # Validate duration for service products
         if self.duration < timedelta(minutes=5):
             raise ValidationError(_("Duration of the service product must be at least 5 minutes"))
 
         if self.location_required and not self.location:
             raise ValidationError(_("Location is required for this service product"))
 
+    def __str__(self) -> str:
+        base_str = f"{self.product_name} ({self.get_product_type_display()})"
+        if self.sku:
+            return f"{base_str} [{self.sku}]"
+        return base_str
+
     class Meta:
-        db_table = "service_products"
-        verbose_name = _("Service")
-        verbose_name_plural = _("Services")
-        ordering = ["service_type"]
+        db_table = 'products'
+        verbose_name = 'Product'
+        verbose_name_plural = 'Products'
         indexes = [
+            # Core product identity
+            models.Index(fields=['product_name'], name='prod_name_idx'),
+
+            # Category navigation
+            models.Index(fields=['category'], name='prod_category_idx'),
+            models.Index(fields=['category', 'product_type'], name='prod_category_type_idx'),
+
+            # Price and financial queries
+            models.Index(fields=['cost_price'], name='prod_cost_price_idx'),
+
+            # Status-based filtering
+            models.Index(fields=['status'], name='prod_status_idx'),
+            models.Index(fields=['stock_status'], name='prod_stock_status_idx'),
+            models.Index(fields=['condition'], name='prod_condition_idx'),
+            models.Index(fields=['label'], name='prod_label_idx'),
+            models.Index(fields=['product_type'], name='prod_type_idx'),
+
+            # Inventory management
+            models.Index(fields=['stock_quantity'], name='prod_stock_qty_idx'),
+            models.Index(fields=['stock_status', 'stock_quantity'], name='prod_stock_qty_status_idx'),
+
+            # Marketing and promotions
+            models.Index(fields=['label', 'status'], name='prod_label_status_idx'),
+
+            # Time-based features
+            models.Index(fields=['sale_start_date', 'sale_end_date'], name='prod_sale_dates_idx'),
+            models.Index(fields=['featured_until'], name='prod_featured_until_idx'),
+
+            # Composite queries
+            models.Index(fields=['status', 'stock_status', 'category'], name='prod_status_stock_category_idx'),
+            models.Index(fields=['status', 'product_type', 'category'], name='prod_status_type_category_idx'),
+
+            models.Index(fields=['slug'], name='prod_slug_idx'),
+            models.Index(fields=['category', 'slug'], name='prod_category_slug_idx'),
+
+            # Inventory & SKU indexes
+            models.Index(fields=['sku'], name='prod_sku_idx'),
+            models.Index(fields=['barcode'], name='prod_barcode_idx'),
+
+            # Manufacturing indexes
+            models.Index(fields=['manufacturing_location'], name='prod_mfg_location_idx'),
+            models.Index(fields=['batch_number'], name='prod_batch_number_idx'),
+
+            # Shipping & logistics indexes
+            models.Index(fields=['requires_shipping'], name='prod_requires_shipping_idx'),
+            models.Index(fields=['weight'], name='prod_weight_idx'),
+            models.Index(fields=['fragile'], name='prod_fragile_idx'),
+            models.Index(fields=['hazardous'], name='prod_hazardous_idx'),
+
+            # Composite manufacturing indexes
+            models.Index(fields=['manufacturing_date', 'manufacturing_location'], name='prod_mfg_date_location_idx'),
+
+            # Cost analysis indexes
+            models.Index(fields=['manufacturing_cost'], name='prod_mfg_cost_idx'),
+
+            # File properties
+            models.Index(fields=['file_type'], name='prod_file_type_idx'),
+
             # Service properties
-            models.Index(fields=['service_type'], name='sp_service_type_idx'),
-            models.Index(fields=['duration'], name='sp_duration_idx'),
-            models.Index(fields=['location_required'], name='sp_location_required_idx'),
+            models.Index(fields=['service_type'], name='prod_service_type_idx'),
+            models.Index(fields=['location_required'], name='prod_location_required_idx'),
 
             # Combinations
-            models.Index(fields=['service_type', 'duration'], name='sp_service_type_duration_idx'),
-            models.Index(fields=['service_type', 'location_required'], name='sp_service_type_loc_idx'),
-            models.Index(fields=['duration', 'location_required'], name='sp_duration_loc_idx'),
+            models.Index(fields=['service_type', 'duration'], name='prod_service_type_duration_idx'),
+            models.Index(fields=['service_type', 'location_required'], name='prod_service_type_loc_idx'),
         ]
         constraints = [
+            models.CheckConstraint(check=models.Q(price__gt=0), name="non_negative_greater_than_zero_price"),
+            models.CheckConstraint(check=models.Q(stock_quantity__gt=0), name="stock_quantity_gt_0"),
+            models.CheckConstraint(check=models.Q(low_stock_threshold__gt=0), name="low_stock_threshold_gt_0"),
+
+            # Compare-at price must be greater than selling price (if both set)
+            models.CheckConstraint(
+                check=(
+                        models.Q(compare_at_price__isnull=True) |
+                        models.Q(price__lt=models.F("compare_at_price"))
+                ),
+                name="compare_at_price_greater_than_price"
+            ),
+            models.CheckConstraint(
+                check=(
+                        models.Q(cost_price__isnull=True) |
+                        models.Q(cost_price__lt=models.F("cost_price"))
+                ),
+                name="cost_price_greater_than_price"
+            ),
+
+            # Sale date integrity
+            models.CheckConstraint(
+                check=(
+                        models.Q(sale_end_date__isnull=True) |
+                        models.Q(sale_start_date__isnull=True) |
+                        models.Q(sale_end_date__gte=models.F("sale_start_date"))
+                ),
+                name="valid_sale_date_range"
+            ),
+            # Low stock threshold cannot exceed stock quantity
+            models.CheckConstraint(
+                check=models.Q(low_stock_threshold__lte=models.F("stock_quantity")),
+                name="valid_low_stock_threshold"
+            ),
+            models.CheckConstraint(
+                check=~models.Q(pk=models.F('parent_id')),
+                name='prevent_self_parent_reference_for_product'
+            ),
+            # Physical product checks
+            models.CheckConstraint(check=models.Q(weight__gte=0), name="non_negative_weight"),
+            models.CheckConstraint(check=models.Q(manufacturing_cost__gte=0), name="non_negative_mfg_cost"),
+            models.CheckConstraint(check=models.Q(packaging_cost__gte=0), name="non_negative_packaging_cost"),
+            models.CheckConstraint(check=models.Q(shipping_to_warehouse_cost__gte=0), name="non_negative_ship_cost"),
+            models.CheckConstraint(
+                check=models.Q(shelf_life__gt=timedelta(seconds=0)) | models.Q(shelf_life__isnull=True),
+                name="positive_shelf_life"
+            ),
             models.CheckConstraint(
                 check=models.Q(duration__gte=timedelta(minutes=5)),
-                name="sp_min_duration_5m"
+                name="min_duration_5m"
             ),
             models.CheckConstraint(
                 check=(
                         models.Q(location_required=False) |
                         models.Q(location__isnull=False)
                 ),
-                name="sp_location_required_with_location"
+                name="location_required_with_location"
             )
+
         ]
+        ordering = ['product_name']
+
