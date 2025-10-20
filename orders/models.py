@@ -166,3 +166,19 @@ class Order(CommonModel):
         total = order_items_total + shipping_total + taxes_total
         return total.quantize(Decimal('0.01'))
 
+
+class OrderStatusHistory(CommonModel):
+    order = models.ForeignKey("orders.Order", on_delete=models.CASCADE, related_name="order_status_history")
+    status = models.CharField(max_length=20, choices=OrderStatuses.choices, db_index=True)
+
+    class Meta:
+        db_table = "order_status_history"
+        verbose_name = "Order Status History"
+        verbose_name_plural = "Order Status Histories"
+        ordering = ["-date_created"]
+        indexes = CommonModel.Meta.indexes + [
+            models.Index(fields=["order", "is_deleted"]),
+            models.Index(fields=["order", "status", "is_deleted"]),
+            models.Index(fields=['status', 'date_created', 'is_deleted']),  # Admin filtering by status/time
+        ]
+

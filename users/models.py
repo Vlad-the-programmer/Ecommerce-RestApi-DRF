@@ -17,6 +17,42 @@ class Gender(models.TextChoices):
     NOT_SPECIFIED = "not_specified", _("Not Specified")
 
 
+class UserRole(models.TextChoices):
+    SUPER_ADMIN = "super_admin", _("Super Admin")
+    MANAGER = "manager", _("Manager")
+    EMPLOYEE = "employee", _("Employee")
+    CUSTOMER = "customer", _("Customer")
+    VENDOR = "vendor", _("Vendor")
+
+
+class UserRoles(CommonModel):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="user_roles")
+    role = models.CharField(max_length=50, choices=UserRole.choices)
+    description = models.TextField(max_length=2000, blank=True, null=True)
+
+    def __str__(self):
+        return f"{self.user} - {self.role}"
+
+    class Meta:
+        db_table = "user_roles"
+        verbose_name = "User Role"
+        verbose_name_plural = "User Roles"
+        ordering = ["-date_created"]
+        indexes = [
+            models.Index(fields=["user", "role", "is_deleted"]),
+            models.Index(fields=["user", "is_deleted"]),
+            models.Index(fields=["role", "is_deleted"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user', 'role'],
+                condition=models.Q(is_deleted=False),
+                name='unique_user_role'
+            )
+        ]
+
+
 class ShippingAddress(Address):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
                              related_name="shipping_addresses")
@@ -142,6 +178,7 @@ class User(AuthCommonModel, AbstractUser):
             "unique": _("A user with that username already exists."),
         },
     )
+    role = models.ForeignKey('UserRoles', on_delete=models.SET_NULL, null=True, blank=True)
 
     def __str__(self):
         return self.email
@@ -154,7 +191,9 @@ class User(AuthCommonModel, AbstractUser):
         indexes = AuthCommonModel.Meta.indexes + [
             # Critical authentication indexes
             models.Index(fields=['email']),
+            models.Index(fields=['role']),
             models.Index(fields=['is_deleted', 'email']),
+            models.Index(fields=['is_deleted', 'role']),
             models.Index(fields=['is_deleted', 'is_staff']),
             models.Index(fields=['is_deleted', 'is_superuser']),
             models.Index(fields=['date_joined', 'is_deleted']),
