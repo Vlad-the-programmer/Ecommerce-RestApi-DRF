@@ -7,25 +7,12 @@ from django_countries.fields import CountryField
 from phonenumber_field.modelfields import PhoneNumberField
 
 from common.models import CommonModel, AuthCommonModel, Address
-from userAuth.managers import ProfileManager, CustomUserManager
-
-
-class Gender(models.TextChoices):
-    MALE = "male", _("Male")
-    FEMALE = "female", _("Female")
-    OTHER = "other", _("Other")
-    NOT_SPECIFIED = "not_specified", _("Not Specified")
-
-
-class UserRole(models.TextChoices):
-    SUPER_ADMIN = "super_admin", _("Super Admin")
-    MANAGER = "manager", _("Manager")
-    EMPLOYEE = "employee", _("Employee")
-    CUSTOMER = "customer", _("Customer")
-    VENDOR = "vendor", _("Vendor")
+from users.managers import ProfileManager, CustomUserManager
+from users.enums import UserRole, Gender
 
 
 class UserRoles(CommonModel):
+    """User Role model. It is used to assign a role to a user."""
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
                              related_name="user_roles")
     role = models.CharField(max_length=50, choices=UserRole.choices)
@@ -178,16 +165,18 @@ class User(AuthCommonModel, AbstractUser):
             "unique": _("A user with that username already exists."),
         },
     )
-    role = models.ForeignKey('UserRoles', on_delete=models.SET_NULL, null=True, blank=True)
+    role = models.ForeignKey('UserRoles', on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name="users")
+
 
     def __str__(self):
-        return self.email
+        return f"{self.email} - {self.role}"
 
     class Meta:
         db_table = 'users'
         verbose_name = _('User')
         verbose_name_plural = _('Users')
-        ordering = ['email']
+        ordering = ['email', 'role__role']
         indexes = AuthCommonModel.Meta.indexes + [
             # Critical authentication indexes
             models.Index(fields=['email']),

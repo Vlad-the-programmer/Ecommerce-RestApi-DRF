@@ -4,7 +4,7 @@ from django.core import mail
 from django.contrib.auth import get_user_model
 from rest_framework import status
 
-from users.models import Profile, Gender
+from userAuth.models import Profile, Gender
 
 User = get_user_model()
 

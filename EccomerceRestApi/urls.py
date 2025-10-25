@@ -12,21 +12,18 @@ from drf_spectacular.views import (
 )
 
 # Import settings
-from django.conf import settings
-
 urlpatterns = [
     # Admin
     path('admin/', admin.site.urls),
 
     # API Endpoints
     path('api/profile/', include('users.urls')),
-    path('api/auth/', include('userAuth.urls')),
-
+    
     # Allauth URLs (for email verification)
     path('accounts/', include('allauth.urls')),
 
-    # Apps
-    path('api/cart/', include('cart.urls')),
+    # Auth
+    path('api/auth/', include('userAuth.urls')),
 ]
 
 # Serve media and static files in development

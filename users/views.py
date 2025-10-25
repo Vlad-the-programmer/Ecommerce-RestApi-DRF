@@ -10,7 +10,7 @@ from rest_framework.request import Request
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 
-from userAuth.serializers import UserSerializer, ProfileDetailsUpdateSerializer
+from userAuth.serializers import ProfileDetailsUpdateSerializer
 from django.utils.translation import gettext_lazy as _
 
 from users.models import Profile

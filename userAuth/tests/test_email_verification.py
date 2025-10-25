@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from unittest.mock import patch
 from rest_framework import status
 
-from users.models import Profile
+from userAuth.models import Profile
 
 User = get_user_model()
 

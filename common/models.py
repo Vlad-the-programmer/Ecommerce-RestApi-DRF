@@ -80,18 +80,19 @@ class AuthCommonModel(CommonModel):
 
 class Address(CommonModel):
     # Address line approach (common for e-commerce)
-    address_line_1 = models.CharField(max_length=255, help_text=_("Street address, P.O. box, company name"))
+    address_line_1 = models.CharField(max_length=255,
+                                      help_text=_("Street address, P.O. box, company name"), db_index=True)
     address_line_2 = models.CharField(max_length=255, blank=True, null=True,
                                       help_text=_("Apartment, suite, unit, building, floor, etc."))
     # Optional detailed breakdown
     house_number = models.CharField(max_length=20, blank=True, null=True)
-    street = models.CharField(max_length=100, blank=True, null=True)
+    street = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     apartment_number = models.CharField(max_length=50, blank=True, null=True)
-    zip_code = models.CharField(max_length=15, null=True, blank=True)
-    city = models.CharField(max_length=50, null=True, blank=True)
-    state = models.CharField(max_length=50, null=True, blank=True,
+    zip_code = models.CharField(max_length=15, null=True, blank=True, db_index=True)
+    city = models.CharField(max_length=50, null=True, blank=True, db_index=True)
+    state = models.CharField(max_length=50, null=True, blank=True, db_index=True,
                              help_text=_("State/Province/Region (e.g., Massachusetts, Ontario, Bavaria)"))
-    country = CountryField(null=True, blank=True)
+    country = CountryField(null=True, blank=True, db_index=True)
 
     def __str__(self):
         return f"{self.address_line_1}, {self.city}, {self.state}, {self.country}"
@@ -111,6 +112,17 @@ class Address(CommonModel):
             models.Index(fields=["country", "state", "city", "is_deleted"]),  # Full location queries
 
         ]
+
+    @property
+    def full_address(self):
+        """Get formatted address string"""
+        components = [
+            self.address_line_1,
+            self.address_line_2,
+            f"{self.city}, {self.state} {self.zip_code}" if self.city and self.state else None,
+            self.country.name if self.country else None
+        ]
+        return ", ".join(filter(None, components))
 
 
 class ItemCommonModel(CommonModel):

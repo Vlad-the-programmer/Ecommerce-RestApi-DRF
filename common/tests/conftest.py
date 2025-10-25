@@ -1,5 +1,4 @@
 import pytest
-import os
 from io import BytesIO
 from PIL import Image
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -7,7 +6,7 @@ from django.urls import reverse
 from django.contrib.auth import get_user_model
 from allauth.account.models import EmailConfirmation, EmailAddress
 
-from users.models import Profile, Gender
+from userAuth.models import Profile, Gender
 
 User = get_user_model()
 

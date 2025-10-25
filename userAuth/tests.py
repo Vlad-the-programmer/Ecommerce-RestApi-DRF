@@ -1,4 +1,3 @@
-import os
 from io import BytesIO
 from PIL import Image
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -9,10 +8,10 @@ from django.core import mail
 from rest_framework.test import APITestCase, APIClient
 from rest_framework import status
 from allauth.account.models import EmailConfirmation, EmailAddress
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-from users.models import Profile, Gender
-from userAuth.views import CustomRegisterView, VerifyEmailView
+from users.models import Profile
+from users.enums import Gender
 
 User = get_user_model()
 

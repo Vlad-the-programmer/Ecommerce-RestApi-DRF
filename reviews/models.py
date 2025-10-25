@@ -47,6 +47,7 @@ class Review(CommonModel):
     )
 
     class Meta:
+        db_table = "product_reviews"
         verbose_name = _("Review")
         verbose_name_plural = _("Reviews")
         ordering = ["-date_created", "-rating"]

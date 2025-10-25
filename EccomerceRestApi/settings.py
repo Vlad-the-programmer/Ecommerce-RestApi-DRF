@@ -18,7 +18,6 @@ ALLOWED_HOSTS = ["*"]
 
 
 # Application definition
-
 INSTALLED_APPS = [
     'jazzmin',
     'django.contrib.sites',
@@ -33,6 +32,11 @@ INSTALLED_APPS = [
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
+
+    # User authentication and profiles
+    'users.apps.UsersConfig',
+
+    # Third-party apps
     'dj_rest_auth',
     'dj_rest_auth.registration',
     'rest_framework',
@@ -42,11 +46,9 @@ INSTALLED_APPS = [
     'django_filters',
     'django_countries',
     'drf_spectacular',
-    
+
     # Local apps
     'common.apps.CommonConfig', # Common utils
-    'userAuth.apps.UserAuthConfig',
-    'users.apps.UsersConfig',
     'cart.apps.CartConfig',
     'products.apps.ProductsConfig',
     'shipping.apps.ShippingConfig',
@@ -377,6 +379,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # User model
 AUTH_USER_MODEL = "users.User"
+
 
 # Email backend for development
 if DEBUG:

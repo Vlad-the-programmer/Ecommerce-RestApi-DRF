@@ -4,7 +4,7 @@ from django.urls import reverse
 from django.contrib.auth import get_user_model
 from allauth.account.models import EmailConfirmation, EmailAddress
 
-from users.models import Profile, Gender
+from userAuth.models import Profile, Gender
 from common.tests import conftest
 
 User = get_user_model()

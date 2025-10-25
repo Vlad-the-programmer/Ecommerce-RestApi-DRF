@@ -8,14 +8,12 @@ from dj_rest_auth.registration.views import (
 )
 from rest_framework.response import Response
 from rest_framework import status
-from django.utils.encoding import force_str
-from django.utils.http import urlsafe_base64_decode
-from django.contrib.auth.tokens import default_token_generator
 from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
 
 from users.models import Gender
 
 User = get_user_model()
+
 
 # TODO: Wite tests
 class CustomRegisterView(DjRestAuthRegisterView):
@@ -144,6 +142,7 @@ class CustomRegisterView(DjRestAuthRegisterView):
             else:
                 kwargs['data'] = data
         return serializer_class(*args, **kwargs)
+
 
 class VerifyEmailView(BaseVerifyEmailView):
     """

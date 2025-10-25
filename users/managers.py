@@ -1,14 +1,11 @@
 import re
-from django.contrib.auth import get_user_model
-
-from common.managers import NonDeletedObjectsManager
+from psycopg2 import IntegrityError
 
 from django.contrib.auth.models import BaseUserManager
 from django.utils.translation import gettext_lazy as _
 
-from users.models import UserRoles, UserRole
-
-User = get_user_model()
+from common.managers import NonDeletedObjectsManager
+from users.enums import UserRole, user_roles_descriptions
 
 
 class CustomUserManager(BaseUserManager):
@@ -55,6 +52,8 @@ class CustomUserManager(BaseUserManager):
         """
         Create and save a user with the given email and password.
         """
+        from users.models import UserRoles
+
         # Validate and normalize email
         email = self.validate_email(email)
 
@@ -77,11 +76,29 @@ class CustomUserManager(BaseUserManager):
 
         user.save(using=self._db)
 
-        user = User.objects.get(email=email)
-
+        # No need to refetch the user, we already have it
         # Create a UserRole
-        role = UserRole.SUPER_ADMIN if extra_fields.get('is_superuser') else UserRole.EMPLOYEE if extra_fields.get('is_staff') else UserRole.CUSTOMER
-        user_role = UserRoles.objects.create(user=user, role=UserRole.SUPER_ADMIN)
+        role = (
+            UserRole.SUPER_ADMIN if user.is_superuser
+            else UserRole.EMPLOYEE if user.is_staff
+            else UserRole.CUSTOMER
+        )
+
+        description = user_roles_descriptions.get(role, "Default role description")
+
+        try:
+            user_role = UserRoles.objects.create(user=user, role=role, description=description)
+            user.role = user_role
+            user.save()
+        except IntegrityError:
+            # Handle duplicate role
+            # A UserRoles entry with the same user and role already exists and is not marked as deleted.
+            pass
+        except (ValueError, KeyError) as e:
+            # Handle invalid data
+            # user_roles_descriptions doesn't have a key for the given role or role is not valid.
+            pass
+
         return user
 
     def create_user(self, email, password=None, **extra_fields):
@@ -98,7 +115,7 @@ class CustomUserManager(BaseUserManager):
         """
         Create a superuser with the given email and password.
         """
-        extra_fields.setdefault('is_staff', False)
+        extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
 
