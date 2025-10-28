@@ -20,6 +20,7 @@ class ProductStatus(models.TextChoices):
 class StockStatus(models.TextChoices):
     IN_STOCK = 'in_stock', _('In Stock')
     OUT_OF_STOCK = 'out_of_stock', _('Out of Stock')
+    LOW_STOCK = 'low_stock', _('Low Stock')
     BACKORDER = 'backorder', _('Backorder')
     DISCONTINUED = 'discontinued', _('Discontinued')
     PRE_ORDER = 'pre_order', _('Pre-Order')

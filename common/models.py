@@ -4,10 +4,12 @@ from datetime import timezone
 from decimal import Decimal
 from typing import Optional
 
+from django.conf import settings
 from django.db import models
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 from django_countries.fields import CountryField
+from phonenumber_field.modelfields import PhoneNumberField
 
 from cart.managers import CartItemManager
 from common.managers import NonDeletedObjectsManager
@@ -78,8 +80,8 @@ class AuthCommonModel(CommonModel):
     date_created = None
 
 
-class Address(CommonModel):
-    # Address line approach (common for e-commerce)
+class AddressBaseModel(CommonModel):
+    # AddressBaseModel line approach (common for e-commerce)
     address_line_1 = models.CharField(max_length=255,
                                       help_text=_("Street address, P.O. box, company name"), db_index=True)
     address_line_2 = models.CharField(max_length=255, blank=True, null=True,
@@ -251,3 +253,101 @@ class SlugFieldCommonModel(CommonModel):
             self._generate_and_set_slug(fields_to_slugify)
 
 
+class ShippingAddress(AddressBaseModel):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="shipping_addresses")
+    is_default = models.BooleanField(default=False, help_text=_("Set as default shipping address"))
+
+    def __str__(self):
+        parts = []
+        if self.address_line_1:
+            parts.append(self.address_line_1)
+        if self.address_line_2:
+            parts.append(self.address_line_2)
+        parts.extend([self.city, self.state, self.zip_code, str(self.country)])
+        return ', '.join(parts)
+
+    class Meta:
+        db_table = "shipping_addresses"
+        verbose_name = "Shipping AddressBaseModel"
+        verbose_name_plural = "Shipping Addresses"
+        ordering = ["-is_default", "-date_created"]  # Default addresses first, then newest
+        indexes = AddressBaseModel.Meta.indexes + [
+            # Core relationship indexes
+            models.Index(fields=["user", "is_deleted"]),  # User's addresses + manager
+            models.Index(fields=["user", "is_default", "is_deleted"]),  # User's default address
+
+
+            models.Index(fields=["user", "country", "is_deleted"]),  # User's addresses by country
+
+            # Default address quick lookup
+            models.Index(fields=["is_default", "is_deleted"]),  # All default addresses
+        ]
+        constraints = [
+            # Ensure only one default address per user
+            models.UniqueConstraint(
+                fields=['user'],
+                condition=models.Q(is_default=True, is_deleted=False),
+                name='unique_default_shipping_address'
+            )
+        ]
+
+
+class BillingAddress(AddressBaseModel):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="billing_addresses")
+
+    # Company information (for business purchases)
+    company_name = models.CharField(max_length=100, blank=True, null=True,
+                                    help_text=_("Company name (if applicable)"))
+    tax_id = models.CharField(max_length=50, blank=True, null=True, help_text=_("VAT ID, GST number, etc."))
+
+    # Contact person
+    contact_name = models.CharField(max_length=100, help_text=_("Full name for billing contact"),
+                                    null=True, blank=True)
+
+
+
+    # Contact information
+    email = models.EmailField(help_text=_("Email for billing receipts"), null=True, blank=True)
+    phone = PhoneNumberField(blank=True, null=True)
+
+    # Billing specific
+    is_default = models.BooleanField(default=False, help_text=_("Set as default billing address"))
+    is_business = models.BooleanField(default=False, help_text=_("Business address"))
+
+    def __str__(self):
+        parts = []
+        if self.company_name:
+            parts.append(self.company_name)
+        parts.append(self.contact_name)
+        if self.address_line_1:
+            parts.append(self.address_line_1)
+        if self.address_line_2:
+            parts.append(self.address_line_2)
+        parts.extend([self.city, self.state, self.zip_code, str(self.country)])
+        return ', '.join(parts)
+
+    class Meta:
+        db_table = "billing_addresses"
+        verbose_name = "Billing AddressBaseModel"
+        verbose_name_plural = "Billing Addresses"
+        ordering = ["-is_default", "-date_created"]
+        indexes = AddressBaseModel.Meta.indexes + [
+            # Core relationship indexes
+            models.Index(fields=["user", "is_deleted"]),
+            models.Index(fields=["user", "is_default", "is_deleted"]),
+            models.Index(fields=["user", "is_business", "is_deleted"]),
+
+            # Business-specific indexes
+            models.Index(fields=["is_business", "is_deleted"]),
+            models.Index(fields=["company_name", "is_deleted"]),
+
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user'],
+                condition=models.Q(is_default=True, is_deleted=False),
+                name='unique_default_billing_address'
+            )
+        ]

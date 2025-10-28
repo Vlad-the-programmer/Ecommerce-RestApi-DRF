@@ -1,4 +1,3 @@
-from datetime import timezone
 from decimal import Decimal
 from typing import Optional
 
@@ -7,9 +6,8 @@ from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django_countries.fields import CountryField
 
-from common.models import CommonModel, Address
-from users.models import ShippingAddress
-from .enums import ShippingType, CarrierType, WAREHOUSE_TYPE
+from common.models import CommonModel
+from .enums import ShippingType, CarrierType
 from .managers import ShippingClassManager
 
 
@@ -180,7 +178,8 @@ class ShippingClass(CommonModel):
     )
 
     order = models.OneToOneField("orders.Order", on_delete=models.CASCADE, related_name="shipping_class")
-    shipping_address = models.ForeignKey(ShippingAddress, on_delete=models.CASCADE, related_name="shipping_classes")
+    shipping_address = models.ForeignKey("common.ShippingAddress", on_delete=models.CASCADE,
+                                         related_name="shipping_classes")
 
     def __str__(self):
         return f"{self.name} ({self.get_shipping_type_display()})"
@@ -231,6 +230,7 @@ class ShippingClass(CommonModel):
         # Calculate base cost + weight-based cost
         total_cost = float(self.base_cost)
 
+        # Calculate weight-based cost
         if self.calculate_order_weight() > 0 and self.cost_per_kg > 0:
             total_cost += float(self.cost_per_kg) * self.calculate_order_weight()
 
@@ -425,76 +425,3 @@ class ShippingClass(CommonModel):
             ),
         ]
 
-
-class Warehouse(Address):
-    """Warehouse model for storing warehouse information"""
-
-    name = models.CharField(max_length=255, db_index=True)
-    code = models.CharField(max_length=50, unique=True, db_index=True)
-    contact_phone = models.CharField(max_length=20, blank=True, null=True)
-    contact_email = models.EmailField(blank=True, null=True)
-    is_operational = models.BooleanField(default=True, db_index=True)
-    capacity = models.PositiveIntegerField(help_text="Total storage capacity in units")
-
-    # Additional useful fields for warehouse management
-    warehouse_type = models.CharField(
-        max_length=20,
-        choices=WAREHOUSE_TYPE.choices,
-        default='regional',
-        db_index=True
-    )
-    operating_hours = models.JSONField(
-        blank=True,
-        null=True,
-        help_text="Structured operating hours (e.g., {'mon': {'open': '09:00', 'close': '18:00'}})"
-    )
-    manager = models.ForeignKey(
-        'users.User',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='managed_warehouses'
-    )
-
-    class Meta:
-        db_table = 'warehouses'
-        indexes = Address.Meta.indexes + [
-            # Warehouse-specific indexes
-            models.Index(fields=['country', 'is_operational']),
-            models.Index(fields=['state', 'is_operational']),
-            models.Index(fields=['city', 'is_operational']),
-            models.Index(fields=['is_operational', 'is_active']),
-            models.Index(fields=['warehouse_type', 'is_operational']),
-            models.Index(fields=['code', 'is_active']),
-
-            # Composite indexes for common queries
-            models.Index(fields=['country', 'state', 'is_operational']),
-            models.Index(fields=['warehouse_type', 'country', 'is_active']),
-        ]
-        constraints = [
-            models.UniqueConstraint(
-                fields=['name', 'country'],
-                name='unique_warehouse_name_country',
-                condition=models.Q(is_deleted=False)  # Only enforce on non-deleted records
-            ),
-            models.CheckConstraint(
-                check=models.Q(capacity__gt=0),
-                name='warehouse_capacity_positive'
-            ),
-            models.CheckConstraint(
-                check=models.Q(contact_phone__isnull=False) | models.Q(contact_email__isnull=False),
-                name='at_least_one_contact_method'
-            ),
-        ]
-        ordering = ['country', 'state', 'city', 'name']
-
-    def __str__(self):
-        return f"{self.name} ({self.code})"
-
-
-    def get_operating_hours_today(self):
-        """Get today's operating hours"""
-        if not self.operating_hours:
-            return None
-        today = timezone.now().strftime('%a').lower()
-        return self.operating_hours.get(today)

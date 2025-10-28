@@ -24,9 +24,3 @@ class CarrierType(TextChoices):
     IN_HOUSE = 'in_house', _('In-House Delivery')
     THIRD_PARTY = 'third_party', _('Third Party Logistics')
 
-
-class WAREHOUSE_TYPE(TextChoices):
-    MAIN = 'main', _("Main")
-    REGIONAL = 'regional', _("Regional")
-    STORE = 'store', _("Store")
-    DROP_SHIP = 'drop_ship', _("Drop-ship")

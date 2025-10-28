@@ -6,11 +6,13 @@ from dj_rest_auth.registration.views import (
      RegisterView as DjRestAuthRegisterView,
     VerifyEmailView as BaseVerifyEmailView
 )
+from allauth.account.models import EmailConfirmation
 from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
 
 from users.models import Gender
+
 
 User = get_user_model()
 
@@ -151,21 +153,38 @@ class VerifyEmailView(BaseVerifyEmailView):
 
     def post(self, request, *args, **kwargs):
         try:
-            response = super().post(request, *args, **kwargs)
+            # Get the confirmation key from request
+            key = request.data.get('key')
+            if not key:
+                return Response(
+                    {'detail': 'Verification key is required.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-            if response:
-                confirmation = self.get_object()
-                user = User.objects.get(email=confirmation.email)
-                user.is_active = True
+            # Verify the email
+            confirmation = EmailConfirmation.objects.get(key=key)
+            confirmation.confirm(request)
+
+            # Activate the user and profile
+            user = confirmation.email_address.user
+            user.is_active = True
+            user.save()
+
+            # Activate profile if it exists
+            if hasattr(user, 'profile'):
                 user.profile.is_active = True
                 user.profile.save()
-                user.save()
 
             return Response(
                 {'detail': 'Email successfully verified. You can now log in.'},
                 status=status.HTTP_200_OK
             )
 
+        except EmailConfirmation.DoesNotExist:
+            return Response(
+                {'detail': 'Invalid verification key.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
         except Exception as e:
             import logging
             logger = logging.getLogger(__name__)

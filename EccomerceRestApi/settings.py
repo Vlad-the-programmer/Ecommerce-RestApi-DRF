@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     'wishlist.apps.WishlistConfig',
     'invoices.apps.InvoicesConfig',
     'payments.apps.PaymentsConfig',
+    'inventory.apps.InventoryConfig',
 ]
 
 MIDDLEWARE = [

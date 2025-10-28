@@ -404,7 +404,7 @@ class CustomRegisterSerializer(DefaultRegisterSerializer):
     gender = serializers.ChoiceField(choices=Gender, required=False, allow_blank=True,
                                      default=Gender.NOT_SPECIFIED)
     country = CountryField(required=False, default='', allow_blank=True)
-    phone_number = PhoneNumberField(required=True, region='PL')
+    phone_number = PhoneNumberField(required=True)
     date_of_birth = serializers.DateField(required=True)
     avatar = serializers.ImageField(required=False, allow_null=True, allow_empty_file=True)
     password1 = PasswordField()

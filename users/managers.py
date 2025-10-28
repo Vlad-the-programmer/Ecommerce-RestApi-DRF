@@ -76,7 +76,6 @@ class CustomUserManager(BaseUserManager):
 
         user.save(using=self._db)
 
-        # No need to refetch the user, we already have it
         # Create a UserRole
         role = (
             UserRole.SUPER_ADMIN if user.is_superuser

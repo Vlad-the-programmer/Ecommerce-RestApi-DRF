@@ -6,7 +6,7 @@ from django.contrib.auth.models import AbstractUser
 from django_countries.fields import CountryField
 from phonenumber_field.modelfields import PhoneNumberField
 
-from common.models import CommonModel, AuthCommonModel, Address
+from common.models import CommonModel, AuthCommonModel
 from users.managers import ProfileManager, CustomUserManager
 from users.enums import UserRole, Gender
 
@@ -36,106 +36,6 @@ class UserRoles(CommonModel):
                 fields=['user', 'role'],
                 condition=models.Q(is_deleted=False),
                 name='unique_user_role'
-            )
-        ]
-
-
-class ShippingAddress(Address):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
-                             related_name="shipping_addresses")
-    is_default = models.BooleanField(default=False, help_text=_("Set as default shipping address"))
-
-    def __str__(self):
-        parts = []
-        if self.address_line_1:
-            parts.append(self.address_line_1)
-        if self.address_line_2:
-            parts.append(self.address_line_2)
-        parts.extend([self.city, self.state, self.zip_code, str(self.country)])
-        return ', '.join(parts)
-
-    class Meta:
-        db_table = "shipping_addresses"
-        verbose_name = "Shipping Address"
-        verbose_name_plural = "Shipping Addresses"
-        ordering = ["-is_default", "-date_created"]  # Default addresses first, then newest
-        indexes = Address.Meta.indexes + [
-            # Core relationship indexes
-            models.Index(fields=["user", "is_deleted"]),  # User's addresses + manager
-            models.Index(fields=["user", "is_default", "is_deleted"]),  # User's default address
-
-
-            models.Index(fields=["user", "country", "is_deleted"]),  # User's addresses by country
-
-            # Default address quick lookup
-            models.Index(fields=["is_default", "is_deleted"]),  # All default addresses
-        ]
-        constraints = [
-            # Ensure only one default address per user
-            models.UniqueConstraint(
-                fields=['user'],
-                condition=models.Q(is_default=True, is_deleted=False),
-                name='unique_default_shipping_address'
-            )
-        ]
-
-
-class BillingAddress(Address):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
-                             related_name="billing_addresses")
-
-    # Company information (for business purchases)
-    company_name = models.CharField(max_length=100, blank=True, null=True,
-                                    help_text=_("Company name (if applicable)"))
-    tax_id = models.CharField(max_length=50, blank=True, null=True, help_text=_("VAT ID, GST number, etc."))
-
-    # Contact person
-    contact_name = models.CharField(max_length=100, help_text=_("Full name for billing contact"),
-                                    null=True, blank=True)
-
-
-
-    # Contact information
-    email = models.EmailField(help_text=_("Email for billing receipts"), null=True, blank=True)
-    phone = PhoneNumberField(blank=True, null=True)
-
-    # Billing specific
-    is_default = models.BooleanField(default=False, help_text=_("Set as default billing address"))
-    is_business = models.BooleanField(default=False, help_text=_("Business address"))
-
-    def __str__(self):
-        parts = []
-        if self.company_name:
-            parts.append(self.company_name)
-        parts.append(self.contact_name)
-        if self.address_line_1:
-            parts.append(self.address_line_1)
-        if self.address_line_2:
-            parts.append(self.address_line_2)
-        parts.extend([self.city, self.state, self.zip_code, str(self.country)])
-        return ', '.join(parts)
-
-    class Meta:
-        db_table = "billing_addresses"
-        verbose_name = "Billing Address"
-        verbose_name_plural = "Billing Addresses"
-        ordering = ["-is_default", "-date_created"]
-        indexes = Address.Meta.indexes + [
-            # Core relationship indexes
-            models.Index(fields=["user", "is_deleted"]),
-            models.Index(fields=["user", "is_default", "is_deleted"]),
-            models.Index(fields=["user", "is_business", "is_deleted"]),
-
-            # Business-specific indexes
-            models.Index(fields=["is_business", "is_deleted"]),
-            models.Index(fields=["company_name", "is_deleted"]),
-
-        ]
-        constraints = [
-            models.UniqueConstraint(
-                fields=['user'],
-                condition=models.Q(is_default=True, is_deleted=False),
-                name='unique_default_billing_address'
             )
         ]
 
@@ -219,14 +119,14 @@ class Profile(CommonModel):
     date_of_birth = models.DateField()
     phone_number = PhoneNumberField(unique=True)
     shipping_address = models.ForeignKey(
-        ShippingAddress,
+        "common.ShippingAddress",
         on_delete=models.SET_NULL,
         related_name="profiles",
         null=True,
         blank=True
     )
     billing_address = models.ForeignKey(
-        BillingAddress,
+        "common.BillingAddress",
         on_delete=models.SET_NULL,
         related_name="profiles",
         null=True,
