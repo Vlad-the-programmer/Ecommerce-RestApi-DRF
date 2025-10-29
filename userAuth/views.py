@@ -1,3 +1,5 @@
+import logging
+
 from django.contrib.auth import get_user_model
 
 from rest_framework import parsers
@@ -14,10 +16,11 @@ from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
 from users.models import Gender
 
 
+logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
-# TODO: Wite tests
+
 class CustomRegisterView(DjRestAuthRegisterView):
     """
     Custom registration view that adds support for file uploads.
@@ -133,16 +136,8 @@ class CustomRegisterView(DjRestAuthRegisterView):
         return super().post(request, *args, **kwargs)
 
     def get_serializer(self, *args, **kwargs):
-        # Make sure to pass the request context to the serializer
         serializer_class = self.get_serializer_class()
         kwargs['context'] = self.get_serializer_context()
-        if self.request and hasattr(self.request, 'data') and self.request.data:
-            # Handle both MultiValueDict and regular dict
-            data = self.request.data
-            if hasattr(data, 'dict'):
-                kwargs['data'] = data.dict()
-            else:
-                kwargs['data'] = data
         return serializer_class(*args, **kwargs)
 
 
@@ -154,15 +149,22 @@ class VerifyEmailView(BaseVerifyEmailView):
     def post(self, request, *args, **kwargs):
         try:
             # Get the confirmation key from request
-            key = request.data.get('key')
+            key = request.data.get('key', '').strip()  # Strip whitespace
+            logger.debug(f"VerifyEmailView - Received key: '{key}'")
+            logger.debug(f"VerifyEmailView - Request data: {request.data}")
+
             if not key:
+                logger.warning("VerifyEmailView - Empty or missing key provided")
                 return Response(
-                    {'detail': 'Verification key is required.'},
+                    {'detail': 'Verification key is required and cannot be empty.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
             # Verify the email
             confirmation = EmailConfirmation.objects.get(key=key)
+            logger.debug(f"VerifyEmailView - Found confirmation for: {confirmation.email_address.email}")
+
+            # Confirm the email address
             confirmation.confirm(request)
 
             # Activate the user and profile
@@ -174,24 +176,26 @@ class VerifyEmailView(BaseVerifyEmailView):
             if hasattr(user, 'profile'):
                 user.profile.is_active = True
                 user.profile.save()
+                logger.debug(f"VerifyEmailView - Activated profile for user: {user.email}")
 
+            logger.info(f"VerifyEmailView - Successfully activated user: {user.email}")
             return Response(
                 {'detail': 'Email successfully verified. You can now log in.'},
                 status=status.HTTP_200_OK
             )
 
         except EmailConfirmation.DoesNotExist:
+            logger.warning(f"VerifyEmailView - Confirmation not found for key: {key}")
             return Response(
                 {'detail': 'Invalid verification key.'},
                 status=status.HTTP_404_NOT_FOUND
             )
         except Exception as e:
-            import logging
-            logger = logging.getLogger(__name__)
             logger.error(f'Email verification error: {str(e)}', exc_info=True)
-
             return Response(
                 {
-                    'detail': 'An error occurred while verifying your email. Please try again or request a new verification email.'},
+                    'detail': 'An error occurred while verifying your email. '
+                              'Please try again or request a new verification email.'
+                },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

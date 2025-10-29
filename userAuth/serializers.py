@@ -27,8 +27,9 @@ from common.serializers import BaseCustomModelSerializer
 # Local
 from common.validators import FileSizeValidator as CustomFileSizeValidator
 from userAuth.validators import (
-    validate_password_strength, validate_user_already_exists_with_username,
-    PASSWORD_MIN_LENGTH, USERNAME_REGEX, EMAIL_REGEX, PASSWORD_MAX_LENGTH
+    validate_password_strength,
+    PASSWORD_MIN_LENGTH, USERNAME_REGEX,
+    EMAIL_REGEX, PASSWORD_MAX_LENGTH
 )
 from users.models import Gender, Profile
 
@@ -403,49 +404,63 @@ class CustomRegisterSerializer(DefaultRegisterSerializer):
     last_name = serializers.CharField(required=True)
     gender = serializers.ChoiceField(choices=Gender, required=False, allow_blank=True,
                                      default=Gender.NOT_SPECIFIED)
-    country = CountryField(required=False, default='', allow_blank=True)
+    country = CountryField(required=False, allow_blank=True)
     phone_number = PhoneNumberField(required=True)
     date_of_birth = serializers.DateField(required=True)
     avatar = serializers.ImageField(required=False, allow_null=True, allow_empty_file=True)
     password1 = PasswordField()
     password2 = PasswordField()
 
-    def validate_username(self, username):
-        validate_user_already_exists_with_username(username)
-        return super().validate_username()
+    def validate_email(self, email):
+        """Validate that email is not already in use."""
+        if User.objects.filter(email=email).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return email
+
+    def validate_phone_number(self, phone_number):
+        """Validate that phone number is not already in use."""
+        if Profile.objects.filter(phone_number=phone_number).exists():
+            raise serializers.ValidationError("A user with this phone number already exists.")
+        return phone_number
 
     def get_cleaned_data(self):
-        """Separate user data from profile data for proper model creation."""
+        """
+        Return ALL the cleaned data in the format expected by allauth.
+        """
         return {
-            'user_data': {
-                'email': self.validated_data.get('email', ''),
-                'first_name': self.validated_data.get('first_name', ''),
-                'last_name': self.validated_data.get('last_name', ''),
-                'password1': self.validated_data.get('password1', ''),
-            },
-            'profile_data': {
-                'gender': self.validated_data.get('gender'),
-                'country': self.validated_data.get('country'),
-                'phone_number': self.validated_data.get('phone_number'),
-                'date_of_birth': self.validated_data.get('date_of_birth'),
-                'avatar': self.validated_data.get('avatar'),
-            }
+            'username': '',  # Empty since we're using email
+            'password1': self.validated_data.get('password1', ''),
+            'email': self.validated_data.get('email', ''),
+            'first_name': self.validated_data.get('first_name', ''),
+            'last_name': self.validated_data.get('last_name', ''),
         }
 
-    def save(self, request=None):
-        """Save user and profile data to appropriate models."""
-        cleaned_data = self.get_cleaned_data()
-        profile_data = cleaned_data['profile_data']
-
+    def save(self, request):
+        """
+        Save the user and create their profile.
+        """
+        # Let allauth create the user first
         user = super().save(request)
-        user.refresh_from_db()
 
-        Profile.objects.create(
-            user=user,
-            **{k: v for k, v in profile_data.items() if v is not None}
-        )
+        # Debug: Check what user was created
+        print(f"🔧 User created: {user.id}, Email: '{user.email}'")
+
+        # Create the profile
+        profile_data = {
+            'gender': self.validated_data.get('gender'),
+            'country': self.validated_data.get('country'),
+            'phone_number': self.validated_data.get('phone_number'),
+            'date_of_birth': self.validated_data.get('date_of_birth'),
+            'avatar': self.validated_data.get('avatar'),
+        }
+
+        # Remove None values
+        profile_data = {k: v for k, v in profile_data.items() if v is not None}
+
+        Profile.objects.create(user=user, **profile_data)
 
         return user
+
 
 @extend_schema_serializer(
     examples=[

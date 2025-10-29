@@ -11,7 +11,9 @@ import string
 
 from users.models import Profile
 
+
 User = get_user_model()
+
 
 def generate_valid_polish_phone_number():
     """Generate a valid Polish phone number for tests."""

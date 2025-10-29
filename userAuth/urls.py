@@ -9,7 +9,7 @@ app_name = 'userAuth'
 
 urlpatterns = [
     # Authentication URLs
-    path('/', include('dj_rest_auth.urls')),
+    path('', include('dj_rest_auth.urls')),
 
     # Registration endpoints
     path('registration/', include([

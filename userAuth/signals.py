@@ -9,11 +9,9 @@ from rest_framework.authtoken.models import Token
 @receiver(post_save, sender=settings.AUTH_USER_MODEL)
 def create_user(sender, instance, created, *args, **kwargs):
     if created:
-        if not instance.username:
-            instance.username = instance.email.split('@')[0]
-            
-        instance.username.lower()
-        instance.save()
+        if settings.ACCOUNT_EMAIL_VERIFICATION != 'none':
+            instance.is_active = False
+            instance.save()
 
         Token.objects.get_or_create(user=instance)
         print('Token ', Token.objects.get(user=instance))

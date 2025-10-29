@@ -1,10 +1,12 @@
+import logging
 import pytest
 from django.contrib.auth import get_user_model
 from unittest.mock import patch
 from rest_framework import status
-from allauth.account.models import EmailConfirmation
 
 from users.models import Profile
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -18,25 +20,35 @@ class TestVerifyEmailView:
         """Test successful email verification."""
         user, profile, email_address, confirmation = unverified_user()
 
+        # Verify we have a valid key
+        assert confirmation.key, "Confirmation key should not be empty"
+        assert len(confirmation.key) > 10, "Confirmation key should be reasonably long"
+
+        logger.debug("Testing with key: '%s'", confirmation.key)
+
         data = {'key': confirmation.key}
         response = client.post(verify_email_url, data, format='json')
 
-        # This might return 201 or 200 depending on your implementation
-        assert response.status_code in [status.HTTP_200_OK, status.HTTP_201_CREATED]
+        logger.debug("Response status: %s", response.status_code)
+        logger.debug("Response data: %s", response.data)
+
+        assert response.status_code == status.HTTP_200_OK
+        assert 'successfully verified' in response.data['detail'].lower()
 
         # Refresh from database
         user.refresh_from_db()
         profile.refresh_from_db()
         email_address.refresh_from_db()
 
-        # Check that user and profile are now active
         assert user.is_active is True
         assert profile.is_active is True
         assert email_address.verified is True
 
+        logger.info("Successfully verified email for user: %s", user.email)
+
     def test_email_verification_invalid_key(self, client, verify_email_url):
         """Test email verification with invalid key."""
-        data = {'key': 'invalid-key'}
+        data = {'key': 'invalid-key-that-is-long-enough'}
         response = client.post(verify_email_url, data, format='json')
         assert response.status_code == status.HTTP_404_NOT_FOUND
 
@@ -50,7 +62,7 @@ class TestVerifyEmailView:
         """Test exception handling during email verification."""
         mock_get.side_effect = Exception('Test error')
 
-        data = {'key': 'any-key'}
+        data = {'key': 'any-valid-looking-key'}
         response = client.post(verify_email_url, data, format='json')
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
 
@@ -58,17 +70,25 @@ class TestVerifyEmailView:
         """Test email verification for already verified email."""
         user, profile, email_address, confirmation = unverified_user()
 
+        # Verify we have a valid key
+        assert confirmation.key, "Confirmation key should not be empty"
+
         # Mark email as already verified
         email_address.verified = True
         email_address.save()
 
         data = {'key': confirmation.key}
         response = client.post(verify_email_url, data, format='json')
-        assert response.status_code in [status.HTTP_200_OK, status.HTTP_201_CREATED]
+
+        assert response.status_code == status.HTTP_200_OK
+        logger.debug("Already verified email handled correctly")
 
     def test_email_verification_activates_correct_user(self, client, unverified_user, verify_email_url):
         """Test that verification activates the correct user."""
         user, profile, email_address, confirmation = unverified_user()
+
+        # Verify we have a valid key
+        assert confirmation.key, "Confirmation key should not be empty"
 
         # Create another user with unique phone number
         other_user = User.objects.create_user(
@@ -87,7 +107,8 @@ class TestVerifyEmailView:
 
         data = {'key': confirmation.key}
         response = client.post(verify_email_url, data, format='json')
-        assert response.status_code in [status.HTTP_200_OK, status.HTTP_201_CREATED]
+
+        assert response.status_code == status.HTTP_200_OK
 
         # Verify correct user is activated
         user.refresh_from_db()
@@ -99,3 +120,5 @@ class TestVerifyEmailView:
         assert profile.is_active is True
         assert other_user.is_active is False
         assert other_profile.is_active is False
+
+        logger.info("Correct user activated: %s", user.email)

@@ -177,7 +177,7 @@ REST_AUTH = {
     'OLD_PASSWORD_FIELD_ENABLED': False,
     'LOGOUT_ON_PASSWORD_CHANGE': False,
     'SESSION_LOGIN': True,
-    'USE_JWT': False,
+    'USE_JWT': True,
     'JWT_AUTH_COOKIE': None,
     'JWT_AUTH_REFRESH_COOKIE': None,
     'JWT_AUTH_REFRESH_COOKIE_PATH': '/',
@@ -192,7 +192,7 @@ REST_AUTH = {
 }
 
 # Use Token Authentication
-REST_USE_JWT = False
+REST_USE_JWT = True
 
 # Add Token Authentication to default authentication classes
 REST_FRAMEWORK['DEFAULT_AUTHENTICATION_CLASSES'] = [
@@ -209,18 +209,38 @@ LOGGING = {
             'format': '{levelname} {asctime} {module} {message}',
             'style': '{',
         },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
     },
     'handlers': {
         'console': {
+            'level': 'DEBUG',
             'class': 'logging.StreamHandler',
+            'formatter': 'verbose'
+        },
+        'file': {
+            'level': 'INFO',
+            'class': 'logging.FileHandler',
+            'filename': 'debug.log',
             'formatter': 'verbose',
         },
     },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
     'loggers': {
-        '': {
+        'userAuth': {  # Your authentication app
             'handlers': ['console'],
-            'level': 'INFO',
-            'propagate': True,
+            'level': 'DEBUG',
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['console'],
+            'level': 'ERROR',
+            'propagate': False,
         },
     },
 }
@@ -384,7 +404,6 @@ AUTH_USER_MODEL = "users.User"
 
 # Email backend for development
 if DEBUG:
-    print("\n=== DEBUG: Using console email backend ===")
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 
     SITE_DOMAIN = 'localhost:8000'
@@ -393,95 +412,6 @@ if DEBUG:
     # Ensure the logs directory exists
     log_dir = BASE_DIR / "logs"
     log_dir.mkdir(exist_ok=True)
-
-    # LOGGING = {
-    #     "version": 1,
-    #     "disable_existing_loggers": False,
-    #     "formatters": {
-    #         "verbose": {
-    #             "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
-    #             "style": "{",
-    #         },
-    #         "simple": {
-    #             "format": "{levelname} {message}",
-    #             "style": "{",
-    #         },
-    #         "console": {
-    #             "format": "%(asctime)s %(name)-12s %(levelname)-8s %(message)s",
-    #         },
-    #         "file": {
-    #             "format": "%(asctime)s %(name)-15s %(levelname)-8s %(message)s",
-    #         },
-    #     },
-    #     "filters": {
-    #         "require_debug_true": {
-    #             "()": "django.utils.log.RequireDebugTrue",
-    #         },
-    #     },
-    #     "handlers": {
-    #         "console": {
-    #             "level": "DEBUG",
-    #             "class": "logging.StreamHandler",
-    #             "formatter": "console",
-    #         },
-    #         "file": {
-    #             "level": "INFO",
-    #             "class": "logging.handlers.RotatingFileHandler",
-    #             "formatter": "file",
-    #             "filename": BASE_DIR / "logs/django.log",
-    #             "maxBytes": 1024 * 1024 * 5,  # 5 MB
-    #             "backupCount": 5,
-    #         },
-    #         "mail_admins": {
-    #             "level": "ERROR",
-    #             "class": "django.utils.log.AdminEmailHandler",
-    #         },
-    #     },
-    #     "loggers": {
-    #         # Root logger - captures everything
-    #         "": {
-    #             "handlers": ["console", "file"],
-    #             "level": "INFO",
-    #             "propagate": True,
-    #         },
-    #         # Django framework loggers
-    #         "django": {
-    #             "handlers": ["console", "file"],
-    #             "level": "INFO",
-    #             "propagate": False,
-    #         },
-    #         # Database queries (set to DEBUG to see SQL queries)
-    #         "django.db.backends": {
-    #             "handlers": ["console"],
-    #             "level": "INFO",
-    #             "propagate": False,
-    #         },
-    #         # Allauth logging
-    #         "allauth": {
-    #             "handlers": ["console", "file"],
-    #             "level": "DEBUG",
-    #             "propagate": False,
-    #         },
-    #         # Email logging
-    #         "django.core.mail": {
-    #             "handlers": ["console", "file"],
-    #             "level": "DEBUG",
-    #             "propagate": False,
-    #         },
-    #         # Your apps logging
-    #         "users": {
-    #             "handlers": ["console", "file"],
-    #             "level": "DEBUG",
-    #             "propagate": False,
-    #         },
-    #         "posts": {
-    #             "handlers": ["console", "file"],
-    #             "level": "DEBUG",
-    #             "propagate": False,
-    #         },
-    #         # Add other apps as needed
-    #     },
-    # }
 else:
     SITE_DOMAIN = config('SITE_DOMAIN', default='localhost:8000')
     SITE_NAME = config('SITE_NAME', default='Localhost')
