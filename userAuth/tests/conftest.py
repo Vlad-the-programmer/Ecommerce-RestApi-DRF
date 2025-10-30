@@ -80,135 +80,112 @@ def minimal_registration_data():
 
 
 @pytest.fixture
-def existing_user():
+def existing_user(db):
     """Create an existing user for duplicate tests."""
+    email = 'existing@example.com'
+    phone_number = generate_valid_polish_phone_number()
 
-    def _create_user(email='existing@example.com', phone_number=None):
-        if phone_number is None:
-            phone_number = generate_valid_polish_phone_number()
-
-        user = User.objects.create_user(
-            email=email,
-            first_name='Existing',
-            last_name='User',
-            password='password123'
-        )
-        Profile.objects.create(
-            user=user,
-            phone_number=phone_number,
-            date_of_birth='1990-01-01'
-        )
-        return user
-
-    return _create_user
+    user = User.objects.create_user(
+        email=email,
+        first_name='Existing',
+        last_name='User',
+        password='password123'
+    )
+    Profile.objects.create(
+        user=user,
+        phone_number=phone_number,
+        date_of_birth='1990-01-01'
+    )
+    return user
 
 
 @pytest.fixture
-def verified_user():
-    """Create a fully verified user with active profile.
-        Returns:
-                tuple: A tuple containing the user, profile, email address, and confirmation.
+def verified_user(db):
     """
-
-    def _create_user(email='verified@example.com', password='password123'):
-        """Create a fully verified user with active profile.
-
-        Args:
-            email (str): The email address of the user.
-            password (str): The password of the user.
-
-        Returns:
-            tuple: A tuple containing the user, profile, email address, and confirmation.
-        """
-        # Create user
-        user = User.objects.create_user(
-            email=email,
-            first_name='Verified',
-            last_name='User',
-            password=password,
-            is_active=True  # User is active
-        )
-
-        # Create profile
-        profile = Profile.objects.create(
-            user=user,
-            phone_number=generate_valid_polish_phone_number(),
-            date_of_birth='1990-01-01',
-            gender=Gender.MALE,
-            country='US',
-            is_active=True  # Profile is active
-        )
-
-        # Create verified email address
-        email_address = EmailAddress.objects.create(
-            user=user,
-            email=user.email,
-            primary=True,
-            verified=True  # Email is verified
-        )
-
-        # Create confirmation (for completeness, though already verified)
-        confirmation = EmailConfirmation.create(email_address)
-        confirmation.sent = timezone.now()
-        confirmation.save()
-
-        logger.debug("Created verified user: %s", user.email)
-
-        return user, profile, email_address, confirmation
-
-    return _create_user
-
-
-@pytest.fixture
-def unverified_user():
-    """Create an unverified user with email confirmation.
-
+    Create a fully verified user with active profile.
     Returns:
             tuple: A tuple containing the user, profile, email address, and confirmation.
     """
+    email = 'verified@example.com'
+    password = 'password123'
 
-    def _create_user():
-        """Create an unverified user with email confirmation.
+    # Create user
+    user = User.objects.create_user(
+        email=email,
+        first_name='Verified',
+        last_name='User',
+        password=password,
+        is_active=True
+    )
 
-        Returns:
-                tuple: A tuple containing the user, profile, email address, and confirmation.
-        """
-        user = User.objects.create_user(
-            email='unverified@example.com',
-            first_name='Unverified',
-            last_name='User',
-            password='password123',
-            is_active=False
-        )
-        profile = Profile.objects.create(
-            user=user,
-            phone_number=generate_valid_polish_phone_number(),
-            date_of_birth='1995-01-01',
-            is_active=False
-        )
-        email_address = EmailAddress.objects.create(
-            user=user,
-            email=user.email,
-            primary=True,
-            verified=False
-        )
+    # Create profile
+    profile = Profile.objects.create(
+        user=user,
+        phone_number=generate_valid_polish_phone_number(),
+        date_of_birth='1990-01-01',
+        gender=Gender.MALE,
+        country='US',
+        is_active=True
+    )
 
-        # Let allauth generate the key properly
-        confirmation = EmailConfirmation.create(email_address)
-        confirmation.sent = timezone.now()
-        confirmation.save()
+    # Create verified email address
+    email_address = EmailAddress.objects.create(
+        user=user,
+        email=user.email,
+        primary=True,
+        verified=True
+    )
 
-        logger.debug("Allauth generated key: '%s'", confirmation.key)
+    # Create confirmation
+    confirmation = EmailConfirmation.create(email_address)
+    confirmation.sent = timezone.now()
+    confirmation.save()
 
-        return user, profile, email_address, confirmation
+    logger.debug("Created verified user: %s", user.email)
 
-    return _create_user
+    return user, profile, email_address, confirmation
+
+
+@pytest.fixture
+def unverified_user(db):
+    """
+    Create an unverified user with email confirmation.
+    Returns:
+            tuple: A tuple containing the user, profile, email address, and confirmation.
+    """
+    user = User.objects.create_user(
+        email='unverified@example.com',
+        first_name='Unverified',
+        last_name='User',
+        password='password123',
+        is_active=False
+    )
+    profile = Profile.objects.create(
+        user=user,
+        phone_number=generate_valid_polish_phone_number(),
+        date_of_birth='1995-01-01',
+        is_active=False
+    )
+    email_address = EmailAddress.objects.create(
+        user=user,
+        email=user.email,
+        primary=True,
+        verified=False
+    )
+
+    confirmation = EmailConfirmation.create(email_address)
+    confirmation.sent = timezone.now()
+    confirmation.save()
+
+    logger.debug("Allauth generated key: '%s'", confirmation.key)
+
+    return user, profile, email_address, confirmation
 
 
 @pytest.fixture
 def authenticated_client(client, verified_user):
     """Create a client authenticated with a verified user."""
-    user, _, _, _ = verified_user()
+    user, _, _, _ = verified_user
     client.force_authenticate(user=user)
     return client
 
@@ -257,7 +234,7 @@ def user_with_token(verified_user):
     """Create a verified user with an auth token."""
 
     def _create_user():
-        user, profile, email_address, confirmation = verified_user()
+        user, profile, email_address, confirmation = verified_user
 
         # Create DRF auth token
         from rest_framework.authtoken.models import Token
@@ -367,10 +344,6 @@ def password_reset_confirm_url():
 @pytest.fixture
 def password_change_url():
     return reverse('userAuth:rest_password_change')
-
-@pytest.fixture
-def user_details_url():
-    return reverse('userAuth:rest_user_details')
 
 @pytest.fixture
 def logout_url():

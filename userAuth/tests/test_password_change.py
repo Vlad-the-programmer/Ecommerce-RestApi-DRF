@@ -1,4 +1,3 @@
-# tests/test_password_change.py
 import pytest
 from rest_framework import status
 
@@ -43,5 +42,7 @@ class TestPasswordChange:
 
         response = authenticated_client.post(password_change_url, data, format='json')
 
+        # Should return 400 with old_password error
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert 'old_password' in response.data
+        assert 'Invalid old password' in str(response.data['old_password'])

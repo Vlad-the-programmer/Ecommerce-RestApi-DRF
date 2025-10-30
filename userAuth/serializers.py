@@ -2,8 +2,8 @@ import logging
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import SetPasswordForm
-from django.core.validators import FileExtensionValidator
 from django.utils.translation import gettext_lazy as _
+
 
 # Third-party
 from django_countries.serializer_fields import CountryField
@@ -17,15 +17,16 @@ from rest_framework.validators import UniqueValidator
 from drf_spectacular.utils import OpenApiExample, extend_schema_serializer
 
 # dj-rest-auth
-from dj_rest_auth.serializers import PasswordResetConfirmSerializer as DefaultPasswordResetConfirmSerializer, \
+from dj_rest_auth.serializers import PasswordResetConfirmSerializer as \
+    DefaultPasswordResetConfirmSerializer, \
     UserDetailsSerializer
+
 from dj_rest_auth.registration.serializers import RegisterSerializer as DefaultRegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer as DefaultUserLoginSerializer
 from dj_rest_auth.serializers import PasswordChangeSerializer as DefaultPasswordChangeSerializer
 
 from common.serializers import BaseCustomModelSerializer
 # Local
-from common.validators import FileSizeValidator as CustomFileSizeValidator
 from userAuth.validators import (
     validate_password_strength,
     PASSWORD_MIN_LENGTH, USERNAME_REGEX,
@@ -200,154 +201,6 @@ class UserSerializer(BaseCustomModelSerializer, UserDetailsSerializer):
 
 
 @extend_schema_serializer(
-    examples=[
-        OpenApiExample(
-            'Complete Profile Response Example',
-            value={
-                'uuid': '123e4567-e89b-12d3-a456-426614174000',
-                'username': 'johndoe',
-                'email': 'john@example.com',
-                'first_name': 'John',
-                'last_name': 'Doe',
-                'gender': 'male',
-                'country': 'US',
-                'avatar': 'https://example.com/media/profiles/avatar.jpg',
-                'date_of_birth': '2000-01-01',
-                'phone_number': '+48123456789',
-                'is_staff': False,
-                'is_active': False,
-                'is_superuser': False,
-                'is_deleted': False,
-                'date_updated': '2023-01-01T12:00:00Z',
-                'date_joined': '2023-01-01T12:00:00Z',
-                'last_login': '2023-01-01T12:00:00Z'
-            },
-            response_only=True,
-            description='Complete user profile with nested user data'
-        ),
-        OpenApiExample(
-            'Profile Update Example',
-            value={
-                'username': 'newusername',
-                'first_name': 'John',
-                'last_name': 'Smith',
-                'gender': 'female',
-                'country': 'GB',
-                'avatar': 'https://example.com/media/profiles/avatar.jpg',
-
-                'date_of_birth': '1995-05-15',
-                'phone_number': '+48123456789'
-            },
-            request_only=True,
-            description='Update profile and user information'
-        )
-    ]
-)
-class ProfileDetailsUpdateSerializer(BaseCustomModelSerializer):
-    """
-    Comprehensive serializer for user profile data with nested user information.
-
-    Handles both User and Profile model updates as well as detailed profile data
-    retrieval through a single endpoint.
-    Supports flat input structure that gets converted to nested model structure.
-
-    Features:
-    - Combined user and profile data management
-    - Image upload with validation (5MB max, JPEG/PNG/GIF)
-    - Country field with ISO 3166-1 alpha-2 codes
-    - Phone number validation for Polish region
-    - Automatic username generation from email
-    """
-    user = UserSerializer()
-
-    gender = serializers.ChoiceField(
-        choices=Gender,
-        allow_blank=True,
-        allow_null=True,
-        required=False,
-        error_messages={
-            'invalid_choice': _('Please select a valid gender.')
-        }
-    )
-    country = CountryField(
-        required=False,
-        help_text=_('ISO 3166-1 alpha-2 country code (e.g., US, GB, DE)')
-    )
-    avatar = serializers.ImageField(
-        required=False,
-        allow_null=True,
-        use_url=True,
-        style={'input_type': 'file'},
-        help_text=_('Profile picture for the user (JPEG, PNG, or GIF, max 5MB)'),
-        validators=[
-            FileExtensionValidator(
-                allowed_extensions=['jpg', 'jpeg', 'png', 'gif'],
-                message=_('Only image files (JPEG, PNG, GIF) are allowed.')
-            ),
-            CustomFileSizeValidator(max_size=5 * 1024 * 1024, message=_('Maximum file size is 5MB.')),
-        ]
-    )
-
-    class Meta(BaseCustomModelSerializer.Meta):
-        model = Profile
-        fields = BaseCustomModelSerializer.Meta.fields + [
-            'user', 'gender', 'country', 'avatar',
-             'date_of_birth', 'phone_number',
-        ]
-        read_only_fields = BaseCustomModelSerializer.Meta.read_only_fields
-
-
-    def to_internal_value(self, data):
-        """Convert flat structure to nested structure for user data."""
-        data = data.copy()
-        user_data = {}
-        user_fields = ['username', 'email', 'first_name', 'last_name']
-
-        for field in user_fields:
-            if field in data:
-                user_data[field] = data.pop(field)
-
-        if user_data:
-            data['user'] = user_data
-
-        return super().to_internal_value(data)
-
-    def to_representation(self, instance):
-        """Custom representation to show flat structure in response."""
-        representation = super().to_representation(instance)
-
-        # Extract user fields from nested 'user' dict to flat structure
-        user_data = representation.pop('user', {})
-        for field in UserSerializer.Meta.fields:
-            if field in user_data:
-                representation[field] = user_data[field]
-
-        return representation
-
-    def update(self, instance, validated_data):
-        """Update both profile and user data with validation."""
-        user_data = validated_data.pop('user', {})
-
-        # Validate and update user data using UserSerializer
-        if user_data:
-            user_serializer = UserSerializer(
-                instance=instance.user,
-                data=user_data,
-                partial=True,
-                context=self.context
-            )
-            user_serializer.is_valid(raise_exception=True)
-            user_serializer.save()
-
-        if 'avatar' in validated_data and validated_data['avatar'] is None:
-            if instance.avatar:
-                instance.avatar.delete(save=False)
-
-        instance = super().update(instance, validated_data)
-        return instance
-
-
-@extend_schema_serializer(
     exclude_fields=['is_staff', 'is_superuser', 'is_active', 'date_updated', 'is_deleted',
                     'date_joined', 'last_login', 'date_deleted'],
     examples=[
@@ -469,7 +322,7 @@ class CustomRegisterSerializer(DefaultRegisterSerializer):
             value={
                 'new_password1': 'NewSecurePass123!',
                 'new_password2': 'NewSecurePass123!',
-                'uid': 'MQ',
+                'uid': 'MQ',  # base64 encoded user ID
                 'token': 'abc123-def456-ghi789'
             },
             request_only=True,
@@ -482,6 +335,22 @@ class CustomRegisterSerializer(DefaultRegisterSerializer):
             },
             response_only=True,
             description='Successful password reset confirmation'
+        ),
+        OpenApiExample(
+            'Password Reset Error - Invalid Token',
+            value={
+                'token': ['Invalid value']
+            },
+            response_only=True,
+            description='Error when reset token is invalid or expired'
+        ),
+        OpenApiExample(
+            'Password Reset Error - Password Mismatch',
+            value={
+                'new_password2': ["The two password fields didn't match."]
+            },
+            response_only=True,
+            description='Error when new passwords do not match'
         )
     ]
 )
@@ -496,6 +365,16 @@ class CustomPasswordResetConfirmSerializer(DefaultPasswordResetConfirmSerializer
     """
     new_password1 = PasswordField()
     new_password2 = PasswordField()
+
+    def validate(self, attrs):
+        """
+        Add custom validation for password matching.
+        """
+        if attrs['new_password1'] != attrs['new_password2']:
+            raise serializers.ValidationError({
+                'new_password2': _("The two password fields didn't match.")
+            })
+        return super().validate(attrs)
 
     @property
     def set_password_form_class(self):
@@ -521,6 +400,14 @@ class CustomPasswordResetConfirmSerializer(DefaultPasswordResetConfirmSerializer
             },
             response_only=True,
             description='Successful password change confirmation'
+        ),
+        OpenApiExample(
+            'Password Change Error - Wrong Old Password',
+            value={
+                'old_password': ['Invalid old password.']
+            },
+            response_only=True,
+            description='Error when old password is incorrect'
         )
     ]
 )
@@ -537,3 +424,24 @@ class CustomPasswordChangeSerializer(DefaultPasswordChangeSerializer):
     old_password = PasswordField()
     new_password1 = PasswordField()
     new_password2 = PasswordField()
+
+    def validate_old_password(self, value):
+        """
+        Validate that the old password is correct.
+        """
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError(_('Invalid old password.'))
+        return value
+
+    def validate(self, attrs):
+        """
+        Validate that new passwords match.
+        """
+        if attrs['new_password1'] != attrs['new_password2']:
+            raise serializers.ValidationError({
+                'new_password2': _("The two password fields didn't match.")
+            })
+        return attrs
+
+

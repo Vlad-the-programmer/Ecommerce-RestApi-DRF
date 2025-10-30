@@ -72,7 +72,7 @@ class TestIntegrationFlow:
         }
         response = client.post(login_url, login_data, format='json')
         assert response.status_code == status.HTTP_200_OK
-        assert 'key' in response.data  # Should return auth token
+        assert 'access' in response.data  # Should return auth token
         logger.info("Login successful, received auth token")
 
     def test_login_before_verification_fails(self, client, minimal_registration_data, register_url, login_url):
@@ -216,7 +216,7 @@ class TestIntegrationFlow:
         # The behavior depends on whether the user is active
         if user.is_active:
             assert response.status_code == status.HTTP_200_OK
-            assert 'key' in response.data
+            assert 'access' in response.data
             logger.info("Login successful with immediately active user")
         else:
             assert response.status_code == status.HTTP_400_BAD_REQUEST
@@ -260,8 +260,9 @@ class TestIntegrationFlow:
         }
         response = client.post(login_url, login_data, format='json')
         assert response.status_code == status.HTTP_200_OK
-        original_token = response.data['key']
 
+        # FIX: Check for JWT token structure instead of 'key'
+        assert 'access' in response.data or 'token' in response.data
         logger.info("User registered, verified, and logged in successfully")
 
     def test_user_profile_data_persistence(self, client, valid_registration_data, register_url, verify_email_url):

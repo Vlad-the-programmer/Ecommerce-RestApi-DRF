@@ -18,7 +18,7 @@ class TestVerifyEmailView:
 
     def test_successful_email_verification(self, client, unverified_user, verify_email_url):
         """Test successful email verification."""
-        user, profile, email_address, confirmation = unverified_user()
+        user, profile, email_address, confirmation = unverified_user
 
         # Verify we have a valid key
         assert confirmation.key, "Confirmation key should not be empty"
@@ -68,7 +68,7 @@ class TestVerifyEmailView:
 
     def test_email_verification_already_verified(self, client, unverified_user, verify_email_url):
         """Test email verification for already verified email."""
-        user, profile, email_address, confirmation = unverified_user()
+        user, profile, email_address, confirmation = unverified_user
 
         # Verify we have a valid key
         assert confirmation.key, "Confirmation key should not be empty"
@@ -85,7 +85,7 @@ class TestVerifyEmailView:
 
     def test_email_verification_activates_correct_user(self, client, unverified_user, verify_email_url):
         """Test that verification activates the correct user."""
-        user, profile, email_address, confirmation = unverified_user()
+        user, profile, email_address, confirmation = unverified_user
 
         # Verify we have a valid key
         assert confirmation.key, "Confirmation key should not be empty"

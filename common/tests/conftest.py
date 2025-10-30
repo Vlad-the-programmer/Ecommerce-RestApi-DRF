@@ -24,6 +24,24 @@ def generate_valid_polish_phone_number():
     return f'+48{prefix}{number}'
 
 
+@pytest.fixture(autouse=True)
+def setup_site(db):
+    """Ensure test site exists for allauth."""
+    from django.contrib.sites.models import Site
+
+    site, created = Site.objects.get_or_create(
+        id=1,
+        defaults={
+            'domain': 'testserver',
+            'name': 'Test Server'
+        }
+    )
+    if not created:
+        site.domain = 'testserver'
+        site.name = 'Test Server'
+        site.save()
+
+
 @pytest.fixture(scope='session')
 def django_db_setup(django_db_setup, django_db_blocker):
     """Ensure clean database setup for tests."""
@@ -113,7 +131,6 @@ def unverified_user():
         return user, profile, email_address, confirmation
 
     return _create_user
-
 
 
 @pytest.fixture

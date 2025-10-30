@@ -84,7 +84,7 @@ class TestCustomRegisterView:
 
     def test_registration_duplicate_email(self, client, valid_registration_data, existing_user, register_url):
         """Test registration fails with duplicate email."""
-        existing_user(email='existing@example.com')
+        existing_user
 
         valid_registration_data['email'] = 'existing@example.com'
         response = client.post(register_url, valid_registration_data, format='json')
@@ -197,8 +197,6 @@ class TestCustomRegisterView:
         assert 'phone_number' in response.data
         assert 'date_of_birth' in response.data
         logger.debug("Missing required fields correctly rejected")
-
-    # Add logging to your other test methods...
 
     @pytest.mark.parametrize('weak_password', ['weak', '12345678', 'password', 'PASSWORD123'])
     def test_registration_weak_password(self, client, valid_registration_data, weak_password, register_url):

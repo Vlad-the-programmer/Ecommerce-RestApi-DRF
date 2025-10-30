@@ -68,9 +68,9 @@ class User(AuthCommonModel, AbstractUser):
     role = models.ForeignKey('UserRoles', on_delete=models.SET_NULL, null=True, blank=True,
                              related_name="users")
 
-
     def __str__(self):
-        return f"{self.email} - {self.role}"
+        role_name = getattr(self.role, 'role', 'No Role') if self.role else "No Role"
+        return f"{self.email} - {role_name}"
 
     class Meta:
         db_table = 'users'

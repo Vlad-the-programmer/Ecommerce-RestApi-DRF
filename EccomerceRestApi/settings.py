@@ -117,6 +117,9 @@ AUTH_PASSWORD_VALIDATORS = [
     },
     {
         'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+        'OPTIONS': {
+            'min_length': 8,
+        }
     },
     {
         'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
@@ -129,6 +132,7 @@ AUTH_PASSWORD_VALIDATORS = [
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.TokenAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
@@ -163,7 +167,7 @@ REST_AUTH = {
     'JWT_SERIALIZER': 'dj_rest_auth.serializers.JWTSerializer',
     'JWT_SERIALIZER_WITH_EXPIRATION': 'dj_rest_auth.serializers.JWTSerializerWithExpiration',
     'JWT_TOKEN_CLAIMS_SERIALIZER': 'rest_framework_simplejwt.serializers.TokenObtainPairSerializer',
-    'USER_DETAILS_SERIALIZER': 'userAuth.serializers.ProfileDetailsUpdateSerializer',
+    'USER_DETAILS_SERIALIZER': 'users.serializers.ProfileDetailsUpdateSerializer',
     'PASSWORD_RESET_SERIALIZER': 'dj_rest_auth.serializers.PasswordResetSerializer',
     'PASSWORD_RESET_CONFIRM_SERIALIZER': 'userAuth.serializers.CustomPasswordResetConfirmSerializer',
     'PASSWORD_CHANGE_SERIALIZER': 'userAuth.serializers.CustomPasswordChangeSerializer',
@@ -176,10 +180,11 @@ REST_AUTH = {
     'PASSWORD_RESET_USE_SITES_DOMAIN': False,
     'OLD_PASSWORD_FIELD_ENABLED': False,
     'LOGOUT_ON_PASSWORD_CHANGE': False,
-    'SESSION_LOGIN': True,
+    # Ensure logout works for unauthenticated users
+    'SESSION_LOGIN': False,
     'USE_JWT': True,
-    'JWT_AUTH_COOKIE': None,
-    'JWT_AUTH_REFRESH_COOKIE': None,
+    'JWT_AUTH_COOKIE': 'jwt-auth',
+    'JWT_AUTH_REFRESH_COOKIE': 'jwt-refresh',
     'JWT_AUTH_REFRESH_COOKIE_PATH': '/',
     'JWT_AUTH_SECURE': False,
     'JWT_AUTH_HTTPONLY': True,
