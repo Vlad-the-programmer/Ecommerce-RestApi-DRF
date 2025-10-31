@@ -4,9 +4,9 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import SetPasswordForm
 from django.utils.translation import gettext_lazy as _
 
-
 # Third-party
 from django_countries.serializer_fields import CountryField
+from drf_spectacular.types import OpenApiTypes
 from phonenumber_field.serializerfields import PhoneNumberField
 
 # DRF
@@ -14,7 +14,7 @@ from rest_framework import serializers
 from rest_framework.validators import UniqueValidator
 
 # Swagger
-from drf_spectacular.utils import OpenApiExample, extend_schema_serializer
+from drf_spectacular.utils import OpenApiExample, extend_schema_serializer, extend_schema_field
 
 # dj-rest-auth
 from dj_rest_auth.serializers import PasswordResetConfirmSerializer as \
@@ -24,6 +24,10 @@ from dj_rest_auth.serializers import PasswordResetConfirmSerializer as \
 from dj_rest_auth.registration.serializers import RegisterSerializer as DefaultRegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer as DefaultUserLoginSerializer
 from dj_rest_auth.serializers import PasswordChangeSerializer as DefaultPasswordChangeSerializer
+from dj_rest_auth.serializers import JWTSerializer as DefaultJWTSerializer
+
+# Simple JWT
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from common.serializers import BaseCustomModelSerializer
 # Local
@@ -109,95 +113,6 @@ class CustomLoginSerializer(DefaultUserLoginSerializer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields.pop('username', None)  # exclude the username field
-
-
-@extend_schema_serializer(
-    examples=[
-        OpenApiExample(
-            'User Response Example',
-            value={
-                'uuid': '123e4567-e89b-12d3-a456-426614174000',
-                'username': 'johndoe',
-                'email': 'john@example.com',
-                'first_name': 'John',
-                'last_name': 'Doe',
-                'is_staff': False,
-                'is_active': True,
-                'is_superuser': False,
-                'is_deleted': False,
-                'date_updated': '2023-01-01T12:00:00Z',
-                'date_deleted': '2023-01-01T12:00:00Z',
-                'date_joined': '2023-01-01T12:00:00Z',
-                'last_login': '2023-01-01T12:00:00Z'
-            },
-            response_only=True,
-            description='Complete user information',
-        ),
-    ]
-)
-class UserSerializer(BaseCustomModelSerializer, UserDetailsSerializer):
-    """
-    Serializer for user profile data.
-
-    Used for:
-    - Retrieving complete user information
-    - Updating user profile details
-    - Email and username validation with uniqueness checks
-
-    All sensitive fields are read-only for security.
-    """
-    email = serializers.EmailField(
-        required=True,
-        validators=[
-            UniqueValidator(
-                queryset=User.objects.all(),
-                lookup='iexact',
-                message=_('A user with this email already exists.')
-            )
-        ],
-        error_messages={
-            'invalid': _('Enter a valid email address.'),
-            'blank': _('This field may not be blank.')
-        }
-    )
-    username = serializers.CharField(
-        max_length=100,
-        required=False,
-        validators=[
-            UniqueValidator(
-                queryset=User.objects.all(),
-                lookup='iexact',
-                message=_('A user with this username already exists.')
-            )
-        ],
-        error_messages={
-            'max_length': _('Username cannot be longer than 100 characters.'),
-            'invalid': _('Username can only contain letters, numbers, and underscores.')
-        }
-    )
-
-    class Meta(BaseCustomModelSerializer.Meta, UserDetailsSerializer.Meta):
-        fields = (BaseCustomModelSerializer.Meta.fields
-                  + list(UserDetailsSerializer.Meta.fields)
-                  + ['is_staff', 'is_superuser', 'date_joined', 'last_login'])
-        read_only_fields = (BaseCustomModelSerializer.Meta.read_only_fields
-                            + list(UserDetailsSerializer.Meta.read_only_fields)
-                            + ['is_staff', 'is_superuser', 'date_joined', 'last_login'])
-
-    def validate_username(self, username: str):
-        """Validate username format against allowed character pattern."""
-        super().validate_username(username)
-        if username and not USERNAME_REGEX.match(username):
-            raise serializers.ValidationError(
-                _('Username can only contain letters, numbers, and underscores.')
-            )
-        return username.lower() if username else username
-
-    def validate_email(self, value):
-        """Validate email format and normalize to lowercase."""
-        if value and not EMAIL_REGEX.match(value):
-            raise serializers.ValidationError(_('Enter a valid email address.'))
-        return value.lower() if value else value
 
 
 @extend_schema_serializer(
@@ -366,16 +281,6 @@ class CustomPasswordResetConfirmSerializer(DefaultPasswordResetConfirmSerializer
     new_password1 = PasswordField()
     new_password2 = PasswordField()
 
-    def validate(self, attrs):
-        """
-        Add custom validation for password matching.
-        """
-        if attrs['new_password1'] != attrs['new_password2']:
-            raise serializers.ValidationError({
-                'new_password2': _("The two password fields didn't match.")
-            })
-        return super().validate(attrs)
-
     @property
     def set_password_form_class(self):
         return SetPasswordForm
@@ -425,23 +330,174 @@ class CustomPasswordChangeSerializer(DefaultPasswordChangeSerializer):
     new_password1 = PasswordField()
     new_password2 = PasswordField()
 
-    def validate_old_password(self, value):
+    @property
+    def set_password_form_class(self):
+        return SetPasswordForm
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            'JWT Login Success Response',
+            value={
+                'access': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
+                'refresh': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
+                'user': {
+                    'id': 1,
+                    'email': 'john@example.com',
+                    'first_name': 'John',
+                    'last_name': 'Doe',
+                    'phone_number': '+48123456789',
+                    'gender': 'male',
+                    'country': 'US',
+                    'date_of_birth': '2000-01-01',
+                    'avatar': 'https://example.com/media/profiles/avatar.jpg'
+                }
+            },
+            response_only=True,
+            description='Successful login response with JWT tokens and user data'
+        ),
+        OpenApiExample(
+            'JWT Login Without Profile',
+            value={
+                'access': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
+                'refresh': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
+                'user': {
+                    'id': 2,
+                    'email': 'jane@example.com',
+                    'first_name': 'Jane',
+                    'last_name': 'Smith',
+                    'phone_number': None,
+                    'gender': None,
+                    'country': None,
+                    'date_of_birth': None,
+                    'avatar': None
+                }
+            },
+            response_only=True,
+            description='Login response when user has no profile data'
+        ),
+    ],
+    component_name='JWTResponse',
+    description="""
+    Custom JWT serializer that provides enhanced user data in login responses.
+
+    This serializer extends the default JWT response to include comprehensive user
+    and profile information, eliminating the need for additional API calls after login.
+
+    Features:
+    - Includes basic user information (id, email, name)
+    - Incorporates profile data if available
+    - Gracefully handles missing profiles
+    - Provides complete user context in login response
+    """
+)
+class CustomJWTSerializer(DefaultJWTSerializer):
+    """
+    Custom JWT serializer to avoid nested user serialization issues
+    and provide comprehensive user data in login responses.
+    """
+
+    @extend_schema_field(OpenApiTypes.OBJECT)
+    def get_user(self, obj):
         """
-        Validate that the old password is correct.
+        Get enhanced user data including profile information.
         """
-        user = self.context['request'].user
-        if not user.check_password(value):
-            raise serializers.ValidationError(_('Invalid old password.'))
-        return value
+        user = obj['user']
+        user_data = {
+            'id': user.id,
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+        }
+
+        # Include profile data if available
+        try:
+            profile = user.profile
+            user_data.update({
+                'phone_number': profile.phone_number,
+                'gender': profile.gender,
+                'country': profile.country,
+                'date_of_birth': profile.date_of_birth,
+                'avatar': profile.avatar.url if profile.avatar else None,
+            })
+        except Profile.DoesNotExist:
+            # Set profile fields to None if profile doesn't exist
+            user_data.update({
+                'phone_number': None,
+                'gender': None,
+                'country': None,
+                'date_of_birth': None,
+                'avatar': None,
+            })
+
+        return user_data
 
     def validate(self, attrs):
         """
-        Validate that new passwords match.
+        Validate and return enhanced JWT response with user data.
         """
-        if attrs['new_password1'] != attrs['new_password2']:
-            raise serializers.ValidationError({
-                'new_password2': _("The two password fields didn't match.")
-            })
-        return attrs
+        data = super().validate(attrs)
 
+        # Replace the user data with our enhanced version
+        data['user'] = self.get_user({'user': self.user})
+
+        return data
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            'Token Obtain Request',
+            value={
+                'email': 'john@example.com',
+                'password': 'SecurePass123!'
+            },
+            request_only=True,
+            description='Login credentials for token generation'
+        ),
+        OpenApiExample(
+            'Token Obtain Response',
+            value={
+                'access': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
+                'refresh': 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...',
+            },
+            response_only=True,
+            description='JWT tokens response with custom claims'
+        ),
+    ],
+    component_name='TokenObtain',
+    description="""
+    Custom token serializer that enhances JWT tokens with user claims.
+
+    This serializer adds user-specific claims to the JWT tokens, allowing
+    client applications to access basic user information without additional
+    API calls. The claims are embedded directly in the token payload.
+
+    Added Claims:
+    - email: User's email address
+    - first_name: User's first name
+    - last_name: User's last name
+
+    Security Note:
+    - Claims are readable by anyone who has the token
+    - Do not include sensitive information in claims
+    - Tokens are signed but not encrypted by default
+    """
+)
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """
+    Custom token serializer to include user data in token response.
+    """
+
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+
+        # Add custom claims
+        token['email'] = user.email
+        token['first_name'] = user.first_name
+        token['last_name'] = user.last_name
+
+        return token
 

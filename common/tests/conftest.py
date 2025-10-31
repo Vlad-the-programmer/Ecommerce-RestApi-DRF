@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from django.core.management import call_command
 from io import BytesIO
@@ -5,15 +7,12 @@ from PIL import Image
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.contrib.auth import get_user_model
-from allauth.account.models import EmailConfirmation, EmailAddress
 import random
 import string
 
-from users.models import Profile
 
-
+logger = logging.getLogger(__name__)
 User = get_user_model()
-
 
 def generate_valid_polish_phone_number():
     """Generate a valid Polish phone number for tests."""
@@ -63,6 +62,14 @@ def client():
 
 
 @pytest.fixture
+def authenticated_client(client, verified_user):
+    """Create a client authenticated with a verified user."""
+    user, _, _, _ = verified_user
+    client.force_authenticate(user=user)
+    return client
+
+
+@pytest.fixture
 def test_image():
     """Create a test image for avatar uploads."""
     file = BytesIO()
@@ -75,62 +82,6 @@ def test_image():
         content=file.read(),
         content_type='image/jpeg'
     )
-
-
-@pytest.fixture
-def existing_user():
-    """Create an existing user for duplicate tests."""
-
-    def _create_user(email='existing@example.com', phone_number=None):
-        if phone_number is None:
-            phone_number = generate_valid_polish_phone_number()
-
-        user = User.objects.create_user(
-            email=email,
-            first_name='Existing',
-            last_name='User',
-            password='password123'
-        )
-        Profile.objects.create(
-            user=user,
-            phone_number=phone_number,
-            date_of_birth='1990-01-01'
-        )
-        return user
-
-    return _create_user
-
-
-@pytest.fixture
-def unverified_user():
-    """Create an unverified user with email confirmation."""
-
-    def _create_user():
-        user = User.objects.create_user(
-            email='unverified@example.com',
-            first_name='Unverified',
-            last_name='User',
-            password='password123',
-            is_active=False
-        )
-        profile = Profile.objects.create(
-            user=user,
-            phone_number=generate_valid_polish_phone_number(),  # Fixed: valid phone number
-            date_of_birth='1995-01-01',
-            is_active=False
-        )
-        email_address = EmailAddress.objects.create(
-            user=user,
-            email=user.email,
-            primary=True,
-            verified=False
-        )
-        confirmation = EmailConfirmation.objects.create(
-            email_address=email_address
-        )
-        return user, profile, email_address, confirmation
-
-    return _create_user
 
 
 @pytest.fixture

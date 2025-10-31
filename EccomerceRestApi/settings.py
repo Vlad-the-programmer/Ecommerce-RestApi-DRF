@@ -61,6 +61,10 @@ INSTALLED_APPS = [
     'inventory.apps.InventoryConfig',
 ]
 
+
+SITE_ID = 1
+
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -93,9 +97,6 @@ TEMPLATES = [
 WSGI_APPLICATION = 'EccomerceRestApi.wsgi.application'
 
 
-# Database
-# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
-
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql_psycopg2',
@@ -107,9 +108,6 @@ DATABASES = {
     }
 }
 
-
-# Password validation
-# https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -128,6 +126,7 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
 
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
@@ -161,28 +160,40 @@ REST_FRAMEWORK = {
     'PAGE_SIZE': 3,
 }
 
+
 REST_AUTH = {
     'LOGIN_SERIALIZER': 'userAuth.serializers.CustomLoginSerializer',
     'TOKEN_SERIALIZER': 'dj_rest_auth.serializers.TokenSerializer',
-    'JWT_SERIALIZER': 'dj_rest_auth.serializers.JWTSerializer',
     'JWT_SERIALIZER_WITH_EXPIRATION': 'dj_rest_auth.serializers.JWTSerializerWithExpiration',
-    'JWT_TOKEN_CLAIMS_SERIALIZER': 'rest_framework_simplejwt.serializers.TokenObtainPairSerializer',
-    'USER_DETAILS_SERIALIZER': 'users.serializers.ProfileDetailsUpdateSerializer',
+    'USER_DETAILS_SERIALIZER': 'users.serializers.UserDetailsSerializer',
     'PASSWORD_RESET_SERIALIZER': 'dj_rest_auth.serializers.PasswordResetSerializer',
     'PASSWORD_RESET_CONFIRM_SERIALIZER': 'userAuth.serializers.CustomPasswordResetConfirmSerializer',
     'PASSWORD_CHANGE_SERIALIZER': 'userAuth.serializers.CustomPasswordChangeSerializer',
     'REGISTER_SERIALIZER': 'userAuth.serializers.CustomRegisterSerializer',
-    'REGISTER_PERMISSION_CLASSES': (
-        'rest_framework.permissions.AllowAny',
-    ),
-    'TOKEN_MODEL': 'rest_framework.authtoken.models.Token',
-    'TOKEN_CREATOR': 'dj_rest_auth.utils.default_create_token',
-    'PASSWORD_RESET_USE_SITES_DOMAIN': False,
-    'OLD_PASSWORD_FIELD_ENABLED': False,
-    'LOGOUT_ON_PASSWORD_CHANGE': False,
-    # Ensure logout works for unauthenticated users
-    'SESSION_LOGIN': False,
+
+    # JWT Configuration
     'USE_JWT': True,
+    'JWT_SERIALIZER': 'userAuth.serializers.CustomJWTSerializer',  # Use custom one
+    'JWT_TOKEN_CLAIMS_SERIALIZER': 'userAuth.serializers.CustomTokenObtainPairSerializer',
+
+    # Token (not used when USE_JWT=True)
+    'TOKEN_MODEL': None,
+
+    # Permissions
+    'REGISTER_PERMISSION_CLASSES': ('rest_framework.permissions.AllowAny',),
+
+    # Password settings
+    'OLD_PASSWORD_FIELD_ENABLED': True,
+    'LOGOUT_ON_PASSWORD_CHANGE': False,
+
+    # Session settings
+    'SESSION_LOGIN': False,
+
+    # Email settings
+    'SEND_ACTIVATION_EMAIL': True,
+    'SEND_CONFIRMATION_EMAIL': True,
+
+    # Cookie settings
     'JWT_AUTH_COOKIE': 'jwt-auth',
     'JWT_AUTH_REFRESH_COOKIE': 'jwt-refresh',
     'JWT_AUTH_REFRESH_COOKIE_PATH': '/',
@@ -192,12 +203,11 @@ REST_AUTH = {
     'JWT_AUTH_RETURN_EXPIRATION': False,
     'JWT_AUTH_COOKIE_USE_CSRF': False,
     'JWT_AUTH_COOKIE_ENFORCE_CSRF_ON_UNAUTHENTICATED': False,
-    'SEND_ACTIVATION_EMAIL': True,
-    'SEND_CONFIRMATION_EMAIL': True,
+
+    # Site settings
+    'PASSWORD_RESET_USE_SITES_DOMAIN': False,
 }
 
-# Use Token Authentication
-REST_USE_JWT = True
 
 # Add Token Authentication to default authentication classes
 REST_FRAMEWORK['DEFAULT_AUTHENTICATION_CLASSES'] = [
@@ -252,11 +262,31 @@ LOGGING = {
 
 # JWT Auth
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
-    'ROTATE_REFRESH_TOKENS': False,
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
-    'UPDATE_LAST_LOGIN': False,
+    'UPDATE_LAST_LOGIN': True,
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'VERIFYING_KEY': None,
+    'AUDIENCE': None,
+    'ISSUER': None,
+    'JWK_URL': None,
+    'LEEWAY': 0,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_HEADER_NAME': 'HTTP_AUTHORIZATION',
+    'USER_ID_FIELD': 'id',
+    'USER_ID_CLAIM': 'user_id',
+    'USER_AUTHENTICATION_RULE': 'rest_framework_simplejwt.authentication.default_user_authentication_rule',
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
+    'TOKEN_TYPE_CLAIM': 'token_type',
+    'TOKEN_USER_CLASS': 'rest_framework_simplejwt.models.TokenUser',
+    'TOKEN_OBTAIN_SERIALIZER': 'users.serializers.CustomTokenObtainPairSerializer',
+    'JTI_CLAIM': 'jti',
+    'SLIDING_TOKEN_REFRESH_EXP_CLAIM': 'refresh_exp',
+    'SLIDING_TOKEN_LIFETIME': timedelta(minutes=5),
+    'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
 }
 
 SPECTACULAR_SETTINGS = {
@@ -352,6 +382,8 @@ SPECTACULAR_SETTINGS = {
 # All auth
 LOGIN_URL = '/api/auth/dj_rest_auth/login/'
 LOGOUT_REDIRECT_URL = '/api/auth/dj_rest_auth/login/'
+ACCOUNT_EMAIL_CONFIRMATION_AUTHENTICATED_REDIRECT_URL = '/api/auth/dj_rest_auth/login/'
+ACCOUNT_EMAIL_CONFIRMATION_ANONYMOUS_REDIRECT_URL = '/api/auth/dj_rest_auth/login/'
 ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 ACCOUNT_CONFIRM_EMAIL_ON_GET = True
 ACCOUNT_EMAIL_CONFIRMATION_EXPIRE_DAYS = 1
@@ -369,10 +401,8 @@ ACCOUNT_SIGNUP_FIELDS = {
 }
 ACCOUNT_LOGIN_METHODS = ["email"]
 ACCOUNT_USER_MODEL_USERNAME_FIELD = None
-ACCOUNT_EMAIL_CONFIRMATION_AUTHENTICATED_REDIRECT_URL = '/api/auth/dj_rest_auth/login/'
-ACCOUNT_EMAIL_CONFIRMATION_ANONYMOUS_REDIRECT_URL = '/api/auth/dj_rest_auth/login/'
 ACCOUNT_DEFAULT_HTTP_PROTOCOL = 'http'
-# Allauth settings
+
 ACCOUNT_UNIQUE_EMAIL = True
 ACCOUNT_EMAIL_SUBJECT_PREFIX = 'Ecommerce Rest API - '
 ACCOUNT_LOGOUT_ON_PASSWORD_CHANGE = True
@@ -381,7 +411,6 @@ ACCOUNT_LOGOUT_ON_PASSWORD_CHANGE = True
 PHONENUMBER_DEFAULT_REGION = 'PL'
 
 # Internationalization
-# https://docs.djangoproject.com/en/5.2/topics/i18n/
 
 LANGUAGE_CODE = 'en-us'
 
@@ -398,8 +427,6 @@ MEDIA_URL = 'media/'
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 

@@ -10,7 +10,7 @@ from rest_framework.request import Request
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 
-from users.serializers import ProfileDetailsUpdateSerializer
+from users.serializers import ProfileDetailsUpdateSerializer, UserDetailsSerializer
 from django.utils.translation import gettext_lazy as _
 
 from users.models import Profile
@@ -25,6 +25,13 @@ class UserViewSet(viewsets.ModelViewSet):
     serializer_class = ProfileDetailsUpdateSerializer
     parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
     http_method_names = ['get', 'put', 'patch', 'delete', 'head', 'options']  # Exclude 'post'
+
+    def get_serializer_class(self):
+        if self.action in ['update', 'partial_update']:
+            return ProfileDetailsUpdateSerializer
+        elif self.action in ['list', 'retrieve']:
+            return UserDetailsSerializer
+        return super().get_serializer_class()
 
     def get_permissions(self):
         if self.action in ['retrieve', 'update', 'partial_update', 'destroy']:
