@@ -84,9 +84,7 @@ class TestCustomRegisterView:
 
     def test_registration_duplicate_email(self, client, valid_registration_data, existing_user, register_url):
         """Test registration fails with duplicate email."""
-        existing_user
-
-        valid_registration_data['email'] = 'existing@example.com'
+        valid_registration_data['email'] = existing_user().email
         response = client.post(register_url, valid_registration_data, format='json')
 
         assert response.status_code == status.HTTP_400_BAD_REQUEST

@@ -1,13 +1,21 @@
 import logging
 
-from django.contrib.auth import get_user_model
+# Rest framework
+from rest_framework import serializers
+
+# Dj-rest-auth
+from dj_rest_auth.serializers import UserDetailsSerializer
+
+# OpenApi
 from drf_spectacular.utils import extend_schema_serializer, OpenApiExample
+
+from django.contrib.auth import get_user_model
 from django_countries.serializer_fields import CountryField
 from django.core.validators import FileExtensionValidator
 
-from rest_framework import serializers
+# Phone number
+from phonenumber_field.serializerfields import PhoneNumberField
 
-from common.serializers import BaseCustomModelSerializer
 from common.validators import FileSizeValidator as CustomFileSizeValidator
 from users.enums import Gender
 from users.models import Profile
@@ -16,6 +24,65 @@ from users.models import Profile
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
+
+class BaseUserProfileValidationSerializer(serializers.Serializer):
+    """
+    Base serializer with common validation logic for user and profile data.
+    """
+
+    def validate(self, attrs):
+        """
+        Validate the entire data set using common validation methods.
+        """
+        attrs = self._validate_username(attrs)
+        return attrs
+
+    def _validate_username(self, attrs):
+        """
+        Validate and handle username - common logic for both serializers.
+        """
+        # Get username based on serializer structure
+        username, user_data, instance = self._get_username_context(attrs)
+
+        if username is not None:  # Check for None, empty string is allowed for auto-generation
+            if not username:
+                # Auto-generate username from email if empty
+                if instance:
+                    user_instance = self._get_user_instance(instance)
+                    if user_instance:
+                        generated_username = User.objects.generate_username(user_instance.email)
+                        self._set_username(attrs, generated_username, user_data)
+                    else:
+                        raise serializers.ValidationError({
+                            'username': 'Username cannot be empty and no user instance available to generate one.'
+                        })
+                else:
+                    raise serializers.ValidationError({
+                        'username': 'Username cannot be empty.'
+                    })
+            else:
+                # Check if username is already taken by another user
+                if instance:
+                    user_instance = self._get_user_instance(instance)
+                    if user_instance and User.objects.filter(username=username).exclude(pk=user_instance.pk).exists():
+                        raise serializers.ValidationError({
+                            'username': 'A user with this username already exists.'
+                        })
+
+        return attrs
+
+    # Abstract methods to be implemented by child classes
+    def _get_username_context(self, attrs):
+        """Extract username context - to be implemented by child classes."""
+        raise NotImplementedError
+
+    def _get_user_instance(self, instance):
+        """Get user instance from serializer instance - to be implemented by child classes."""
+        raise NotImplementedError
+
+    def _set_username(self, attrs, username, user_data):
+        """Set username in attrs - to be implemented by child classes."""
+        raise NotImplementedError
 
 
 @extend_schema_serializer(
@@ -80,22 +147,11 @@ User = get_user_model()
             description='User details when profile does not exist'
         ),
     ],
-    component_name='UserDetails',
-    description="""
-    Comprehensive serializer that combines User model data with related Profile information.
-    Used by dj-rest-auth's UserDetailsView to provide complete user information in a single endpoint.
-
-    Features:
-    - Combines User and Profile model data
-    - Handles profile creation if missing
-    - Supports partial updates for both models
-    - Includes proper validation for profile fields
-    """
+    component_name='UserDetails'
 )
-class UserDetailsSerializer(BaseCustomModelSerializer):
+class CustomUserDetailsSerializer(BaseUserProfileValidationSerializer, UserDetailsSerializer):
     """
-    Serializer for user details that combines User and Profile data.
-    Used by dj-rest-auth's UserDetailsView.
+    Comprehensive serializer that combines User model data with related Profile information.
     """
 
     # Profile fields
@@ -119,21 +175,20 @@ class UserDetailsSerializer(BaseCustomModelSerializer):
         ]
     )
     date_of_birth = serializers.DateField(source='profile.date_of_birth', required=False, allow_null=True)
-    phone_number = serializers.CharField(source='profile.phone_number', required=False, allow_blank=True,
-                                         allow_null=True)
+    phone_number = PhoneNumberField(source='profile.phone_number', required=False)
     is_active_profile = serializers.BooleanField(source='profile.is_active', read_only=True)
     date_updated = serializers.DateTimeField(source='profile.date_updated', read_only=True)
 
     class Meta:
         model = User
-        fields = BaseCustomModelSerializer.Meta.fields + [
-            'id', 'email', 'first_name', 'last_name', 'username',
+        fields = [
+            'pk', 'email', 'first_name', 'last_name', 'username',
             'uuid', 'gender', 'country', 'avatar', 'date_of_birth', 'phone_number',
-            'is_active_profile', 'date_joined', 'last_login'
+            'is_active', 'is_active_profile', 'date_joined', 'last_login', 'date_updated'
         ]
         read_only_fields = [
-            'id', 'email', 'username', 'is_active_profile',
-            'date_joined', 'last_login'
+            'pk', 'email', 'username', 'is_active_profile', 'date_joined', 'last_login', 'date_updated',
+            'date_created',
         ]
 
     def to_representation(self, instance):
@@ -151,18 +206,44 @@ class UserDetailsSerializer(BaseCustomModelSerializer):
 
         return representation
 
+    def _get_username_context(self, attrs):
+        """Extract username context for CustomUserDetailsSerializer."""
+        username = attrs.get('username')
+        user_data = None
+        instance = getattr(self, 'instance', None)
+        return username, user_data, instance
+
+    def _get_user_instance(self, instance):
+        """Get user instance for CustomUserDetailsSerializer."""
+        return instance
+
+    def _set_username(self, attrs, username, user_data):
+        """Set username in attrs for CustomUserDetailsSerializer."""
+        attrs['username'] = username
+
     def update(self, instance, validated_data):
         """
         Update both user and profile data.
         """
-        profile_data = validated_data.pop('profile', {})
+        profile_data = validated_data.pop('profile', {}) if 'profile' in validated_data else {}
 
-        # Update user fields
-        instance = super().update(instance, validated_data)
+        # Update user fields first
+        user_fields = {k: v for k, v in validated_data.items() if k not in ['profile']}
+        instance = super().update(instance, user_fields)
 
-        # Update or create profile
+        # Update or create profile if there's profile data
         if profile_data:
             profile, created = Profile.objects.get_or_create(user=instance)
+
+            # Handle country field - it might come as a string, convert to Country object
+            if 'country' in profile_data and isinstance(profile_data['country'], str):
+                from django_countries import countries
+                # Validate country code
+                if profile_data['country'] in countries:
+                    # CountryField will handle the conversion internally
+                    pass
+                elif profile_data['country'] == '':
+                    profile_data['country'] = None
 
             # Handle avatar deletion
             if 'avatar' in profile_data and profile_data['avatar'] is None:
@@ -215,29 +296,23 @@ class UserDetailsSerializer(BaseCustomModelSerializer):
             description='Update profile and user information'
         ),
     ],
-    component_name='ProfileDetails',
-    description="""
-    Detailed serializer for Profile model with nested User information.
-    Use this for profile-specific endpoints where you need full control over profile operations.
-
-    Key Features:
-    - Full profile data with nested user information
-    - Image upload with validation
-    - Support for avatar deletion
-    - Comprehensive field validation
-    """
+    component_name='ProfileDetails'
 )
-class ProfileDetailsUpdateSerializer(serializers.ModelSerializer):
+class ProfileDetailsUpdateSerializer(BaseUserProfileValidationSerializer, serializers.ModelSerializer):
     """
-    Serializer for Profile model only. Use for profile-specific endpoints.
+    Detailed serializer for Profile model with nested User information.
     """
+
+    # User fields
     email = serializers.EmailField(source='user.email', read_only=True)
     first_name = serializers.CharField(source='user.first_name', required=False)
     last_name = serializers.CharField(source='user.last_name', required=False)
-    username = serializers.CharField(source='user.username', read_only=True)
+    username = serializers.CharField(source='user.username', required=False)
     date_joined = serializers.DateTimeField(source='user.date_joined', read_only=True)
     last_login = serializers.DateTimeField(source='user.last_login', read_only=True)
+    is_active = serializers.BooleanField(source='user.is_active', read_only=True)
 
+    # Profile fields
     gender = serializers.ChoiceField(
         choices=Gender.choices,
         allow_blank=True,
@@ -255,27 +330,45 @@ class ProfileDetailsUpdateSerializer(serializers.ModelSerializer):
         ]
     )
     date_of_birth = serializers.DateField(required=False, allow_null=True)
-    phone_number = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+    phone_number = PhoneNumberField(required=False)
 
     class Meta:
         model = Profile
         fields = [
             'uuid', 'email', 'first_name', 'last_name', 'username',
             'gender', 'country', 'avatar', 'date_of_birth', 'phone_number',
-            'is_active', 'date_updated', 'date_joined', 'last_login'
+            'is_active', 'date_updated', 'date_joined', 'last_login',
         ]
-        read_only_fields = [
-            'uuid', 'email', 'username', 'is_active',
-            'date_updated', 'date_joined', 'last_login'
-        ]
+        read_only_fields = ['uuid', 'date_updated', 'date_created', 'email']
+
+    def _get_username_context(self, attrs):
+        """Extract username context for ProfileDetailsUpdateSerializer."""
+        user_data = attrs.get('user', {})
+        username = user_data.get('username') if user_data else None
+        instance = getattr(self, 'instance', None)
+        return username, user_data, instance
+
+    def _get_user_instance(self, instance):
+        """Get user instance for ProfileDetailsUpdateSerializer."""
+        if instance and hasattr(instance, 'user'):
+            return instance.user
+        return None
+
+    def _set_username(self, attrs, username, user_data):
+        """Set username in attrs for ProfileDetailsUpdateSerializer."""
+        if user_data is not None:
+            if 'user' not in attrs:
+                attrs['user'] = {}
+            attrs['user']['username'] = username
 
     def update(self, instance, validated_data):
         """
         Update both profile and user data.
         """
-        user_data = validated_data.pop('user', {})
+        user_data = validated_data.pop('user', {}) if 'user' in validated_data else {}
 
-        # Update user data
+        # Update user data if provided
         if user_data:
             user = instance.user
             for attr, value in user_data.items():
@@ -288,4 +381,9 @@ class ProfileDetailsUpdateSerializer(serializers.ModelSerializer):
                 instance.avatar.delete(save=False)
 
         # Update profile data
-        return super().update(instance, validated_data)
+        # Note: phone_number is automatically handled by PhoneNumberField
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        return instance

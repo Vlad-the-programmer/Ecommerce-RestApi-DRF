@@ -57,7 +57,76 @@ class CustomRegisterView(DjRestAuthRegisterView):
                         'pattern': '^[a-zA-Z0-9_]+$',
                         'nullable': True
                     },
-                    'password': {
+                    'password1': {
+                        'type': 'string',
+                        'format': 'password',
+                        'description': 'Password (min 8 chars, must contain uppercase, lowercase, and number)'
+                    },
+                    'password2': {
+                        'type': 'string',
+                        'format': 'password',
+                        'description': 'Confirm password (must match password)'
+                    },
+                    'gender': {
+                        'type': 'string',
+                        'enum': [gender[0] for gender in Gender.choices],
+                        'description': 'User gender',
+                        'nullable': True
+                    },
+                    'phone_number': {
+                        'type': 'string',
+                        'description': 'User phone number',
+                        'nullable': True
+                    },
+                    'date_of_birth': {
+                        'type': 'string',
+                        'format': 'date',
+                        'description': 'User date of birth',
+                        'nullable': True
+                    },
+                    'country': {
+                        'type': 'string',
+                        'description': 'ISO 3166-1 alpha-2 country code (e.g., US, GB, DE)',
+                        'nullable': True
+                    },
+                    'avatar': {
+                        'type': 'string',
+                        'format': 'binary',
+                        'description': 'User picture (JPEG, PNG, or GIF, max 5MB)',
+                        'nullable': True
+                    }
+                },
+                'required': ['email', 'first_name', 'last_name', 'phone_number',
+                             'date_of_birth', 'password', 'password2']
+            },
+            'application/json': {
+                'type': 'object',
+                'properties': {
+                    'email': {
+                        'type': 'string',
+                        'format': 'email',
+                        'description': 'User email address (must be unique)'
+                    },
+                    'first_name': {
+                        'type': 'string',
+                        'description': 'User first name',
+                        'minLength': 1,
+                        'maxLength': 30
+                    },
+                    'last_name': {
+                        'type': 'string',
+                        'description': 'User last name',
+                        'minLength': 1,
+                        'maxLength': 30
+                    },
+                    'username': {
+                        'type': 'string',
+                        'description': 'Username (optional, defaults to email username if not provided)',
+                        'maxLength': 100,
+                        'pattern': '^[a-zA-Z0-9_]+$',
+                        'nullable': True
+                    },
+                    'password1': {
                         'type': 'string',
                         'format': 'password',
                         'description': 'Password (min 8 chars, must contain uppercase, lowercase, and number)'
@@ -133,12 +202,19 @@ class CustomRegisterView(DjRestAuthRegisterView):
         }
     )
     def post(self, request, *args, **kwargs):
-        return super().post(request, *args, **kwargs)
-
-    def get_serializer(self, *args, **kwargs):
-        serializer_class = self.get_serializer_class()
-        kwargs['context'] = self.get_serializer_context()
-        return serializer_class(*args, **kwargs)
+        try:
+            response = super().post(request, *args, **kwargs)
+            # Debug: Check what's in the response
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"Registration response status: {response.status_code}")
+            logger.debug(f"Registration response data: {response.data}")
+            return response
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Registration error: {str(e)}")
+            raise
 
 
 class VerifyEmailView(BaseVerifyEmailView):

@@ -2,18 +2,19 @@ import logging
 
 from rest_framework import status
 
+from common.tests.conftest import authenticated_client
+
 logger = logging.getLogger(__name__)
 
 
 class TestUserDetails:
     """Test user details retrieval and update."""
 
-    def test_get_user_details_authenticated(self, client, verified_user, user_details_url):
+    def test_get_user_details_authenticated(self, authenticated_client, verified_user, user_details_url):
         """Test retrieving user details when authenticated."""
         user, profile, _, _ = verified_user
-        client.force_authenticate(user=user)
 
-        response = client.get(user_details_url, format='json')
+        response = authenticated_client.get(user_details_url(profile.uuid), format='json')
 
         # Debug the response
         logger.debug(f"Response status: {response.status_code}")
@@ -32,10 +33,9 @@ class TestUserDetails:
         assert response.data['first_name'] == user.first_name
         assert response.data['last_name'] == user.last_name
 
-    def test_update_user_details(self, client, verified_user, user_details_url):
+    def test_update_user_details(self, authenticated_client, verified_user, user_details_url):
         """Test updating user details."""
         user, profile, _, _ = verified_user
-        client.force_authenticate(user=user)
 
         data = {
             'first_name': 'UpdatedFirstName',
@@ -45,7 +45,7 @@ class TestUserDetails:
         logger.debug(f"Before update - User first_name: {user.first_name}")
         logger.debug(f"Update data: {data}")
 
-        response = client.patch(user_details_url, data, format='json')
+        response = authenticated_client.patch(user_details_url(profile.uuid), data, format='json')
 
         logger.debug(f"Update response status: {response.status_code}")
         logger.debug(f"Update response data: {response.data}")
@@ -74,7 +74,7 @@ class TestUserDetails:
             'phone_number': '+48123456789'
         }
 
-        response = authenticated_client.patch(user_details_url, data, format='json')
+        response = authenticated_client.patch(user_details_url(profile.uuid), data, format='json')
         assert response.status_code == status.HTTP_200_OK
 
         # Refresh profile from database

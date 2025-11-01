@@ -2,7 +2,6 @@ import logging
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import SetPasswordForm
-from django.utils.translation import gettext_lazy as _
 
 # Third-party
 from django_countries.serializer_fields import CountryField
@@ -11,16 +10,12 @@ from phonenumber_field.serializerfields import PhoneNumberField
 
 # DRF
 from rest_framework import serializers
-from rest_framework.validators import UniqueValidator
 
 # Swagger
 from drf_spectacular.utils import OpenApiExample, extend_schema_serializer, extend_schema_field
 
 # dj-rest-auth
-from dj_rest_auth.serializers import PasswordResetConfirmSerializer as \
-    DefaultPasswordResetConfirmSerializer, \
-    UserDetailsSerializer
-
+from dj_rest_auth.serializers import PasswordResetConfirmSerializer as DefaultPasswordResetConfirmSerializer
 from dj_rest_auth.registration.serializers import RegisterSerializer as DefaultRegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer as DefaultUserLoginSerializer
 from dj_rest_auth.serializers import PasswordChangeSerializer as DefaultPasswordChangeSerializer
@@ -29,12 +24,11 @@ from dj_rest_auth.serializers import JWTSerializer as DefaultJWTSerializer
 # Simple JWT
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
-from common.serializers import BaseCustomModelSerializer
 # Local
 from userAuth.validators import (
     validate_password_strength,
-    PASSWORD_MIN_LENGTH, USERNAME_REGEX,
-    EMAIL_REGEX, PASSWORD_MAX_LENGTH
+    PASSWORD_MIN_LENGTH,
+    PASSWORD_MAX_LENGTH
 )
 from users.models import Gender, Profile
 
@@ -181,39 +175,49 @@ class CustomRegisterSerializer(DefaultRegisterSerializer):
 
     def validate_email(self, email):
         """Validate that email is not already in use."""
-        if User.objects.filter(email=email).exists():
+        email = email.lower().strip()  # Normalize email
+
+        # Check if email already exists in User model
+        if User.all_objects.filter(email=email).exists():
             raise serializers.ValidationError("A user with this email already exists.")
+
+        # You can also check EmailAddress model if you're using allauth
+        from allauth.account.models import EmailAddress
+        if EmailAddress.objects.filter(email=email).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+
         return email
 
     def validate_phone_number(self, phone_number):
-        """Validate that phone number is not already in use."""
+        """Validate that phone number is not already in use and is valid."""
+
+        # Check if phone number is already in use
         if Profile.objects.filter(phone_number=phone_number).exists():
             raise serializers.ValidationError("A user with this phone number already exists.")
-        return phone_number
+
+        # Return the string representation to avoid serialization issues
+        return str(phone_number)
 
     def get_cleaned_data(self):
         """
         Return ALL the cleaned data in the format expected by allauth.
         """
-        return {
+        cleaned_data = super().get_cleaned_data()
+
+        cleaned_data.update({
             'username': '',  # Empty since we're using email
-            'password1': self.validated_data.get('password1', ''),
-            'email': self.validated_data.get('email', ''),
             'first_name': self.validated_data.get('first_name', ''),
             'last_name': self.validated_data.get('last_name', ''),
-        }
+        })
 
-    def save(self, request):
+        return cleaned_data
+
+    def custom_signup(self, request, user):
         """
-        Save the user and create their profile.
+        Custom signup processing - called by allauth after user creation.
+        This is the recommended way to add custom logic in allauth.
         """
-        # Let allauth create the user first
-        user = super().save(request)
-
-        # Debug: Check what user was created
-        print(f"🔧 User created: {user.id}, Email: '{user.email}'")
-
-        # Create the profile
+        # Create the profile with validated data
         profile_data = {
             'gender': self.validated_data.get('gender'),
             'country': self.validated_data.get('country'),
@@ -226,6 +230,17 @@ class CustomRegisterSerializer(DefaultRegisterSerializer):
         profile_data = {k: v for k, v in profile_data.items() if v is not None}
 
         Profile.objects.create(user=user, **profile_data)
+
+    def save(self, request):
+        """
+        Save the user and create their profile.
+        Override to ensure proper user creation flow with allauth.
+        """
+        # Let allauth handle the user creation and email verification
+        user = super().save(request)
+
+        # Debug: Check what user was created
+        logger.debug(f"User created: {user.id}, Email: '{user.email}', Active: {user.is_active}")
 
         return user
 
@@ -378,25 +393,30 @@ class CustomPasswordChangeSerializer(DefaultPasswordChangeSerializer):
             description='Login response when user has no profile data'
         ),
     ],
-    component_name='JWTResponse',
-    description="""
-    Custom JWT serializer that provides enhanced user data in login responses.
-
-    This serializer extends the default JWT response to include comprehensive user
-    and profile information, eliminating the need for additional API calls after login.
-
-    Features:
-    - Includes basic user information (id, email, name)
-    - Incorporates profile data if available
-    - Gracefully handles missing profiles
-    - Provides complete user context in login response
-    """
+    component_name='JWTResponse'
 )
 class CustomJWTSerializer(DefaultJWTSerializer):
     """
-    Custom JWT serializer to avoid nested user serialization issues
-    and provide comprehensive user data in login responses.
+    Custom JWT serializer that provides enhanced user data in login responses.
     """
+
+    def _get_phone_number_string(self, profile):
+        """Safely convert phone number to string."""
+        if profile.phone_number:
+            return str(profile.phone_number)
+        return None
+
+    def _get_avatar_url(self, profile):
+        """Safely get avatar URL."""
+        if profile.avatar:
+            return profile.avatar.url
+        return None
+
+    def _get_country_name(self, profile):
+        """Safely get country name."""
+        if profile.country:
+            return str(profile.country)
+        return None
 
     @extend_schema_field(OpenApiTypes.OBJECT)
     def get_user(self, obj):
@@ -415,11 +435,11 @@ class CustomJWTSerializer(DefaultJWTSerializer):
         try:
             profile = user.profile
             user_data.update({
-                'phone_number': profile.phone_number,
+                'phone_number': self._get_phone_number_string(profile),
                 'gender': profile.gender,
-                'country': profile.country,
+                'country': self._get_country_name(profile),
                 'date_of_birth': profile.date_of_birth,
-                'avatar': profile.avatar.url if profile.avatar else None,
+                'avatar': self._get_avatar_url(profile),
             })
         except Profile.DoesNotExist:
             # Set profile fields to None if profile doesn't exist
@@ -438,10 +458,7 @@ class CustomJWTSerializer(DefaultJWTSerializer):
         Validate and return enhanced JWT response with user data.
         """
         data = super().validate(attrs)
-
-        # Replace the user data with our enhanced version
         data['user'] = self.get_user({'user': self.user})
-
         return data
 
 
@@ -466,8 +483,10 @@ class CustomJWTSerializer(DefaultJWTSerializer):
             description='JWT tokens response with custom claims'
         ),
     ],
-    component_name='TokenObtain',
-    description="""
+    component_name='TokenObtain'
+)
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """
     Custom token serializer that enhances JWT tokens with user claims.
 
     This serializer adds user-specific claims to the JWT tokens, allowing
@@ -483,11 +502,6 @@ class CustomJWTSerializer(DefaultJWTSerializer):
     - Claims are readable by anyone who has the token
     - Do not include sensitive information in claims
     - Tokens are signed but not encrypted by default
-    """
-)
-class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """
-    Custom token serializer to include user data in token response.
     """
 
     @classmethod

@@ -27,7 +27,7 @@ class TestIntegrationFlow:
         logger.debug("Registration response: %s", response.data)
 
         # Step 2: Get user and create proper confirmation
-        user = User.objects.get(email='test@example.com')
+        user = User.objects.get(email=minimal_registration_data['email'])
         email_address = EmailAddress.objects.get(email=user.email)
 
         # Create a proper confirmation key (since emails might not be sent in tests)
@@ -67,7 +67,7 @@ class TestIntegrationFlow:
         # Step 4: Login with verified account
         logger.info("Step 3: User login")
         login_data = {
-            'email': 'test@example.com',
+            'email': minimal_registration_data['email'],
             'password': minimal_registration_data['password1']
         }
         response = client.post(login_url, login_data, format='json')
@@ -161,7 +161,7 @@ class TestIntegrationFlow:
         response = client.post(register_url, minimal_registration_data, format='json')
         assert response.status_code == status.HTTP_201_CREATED
 
-        user = User.objects.get(email='test@example.com')
+        user = User.objects.get(email=minimal_registration_data['email'])
         email_address = EmailAddress.objects.get(email=user.email)
 
         # Create confirmation
@@ -192,7 +192,7 @@ class TestIntegrationFlow:
         response = client.post(register_url, minimal_registration_data, format='json')
         assert response.status_code == status.HTTP_201_CREATED
 
-        user = User.objects.get(email='test@example.com')
+        user = User.objects.get(email=minimal_registration_data['email'])
 
         # Debug: Check what's happening
         logger.debug("User active state with verification disabled: %s", user.is_active)
@@ -208,7 +208,7 @@ class TestIntegrationFlow:
 
         # Try to login regardless
         login_data = {
-            'email': 'test@example.com',
+            'email': minimal_registration_data['email'],
             'password': minimal_registration_data['password1']
         }
         response = client.post(login_url, login_data, format='json')
@@ -242,7 +242,7 @@ class TestIntegrationFlow:
         response = client.post(register_url, minimal_registration_data, format='json')
         assert response.status_code == status.HTTP_201_CREATED
 
-        user = User.objects.get(email='test@example.com')
+        user = User.objects.get(email=minimal_registration_data['email'])
         email_address = EmailAddress.objects.get(email=user.email)
 
         confirmation = EmailConfirmation.create(email_address)
@@ -255,7 +255,7 @@ class TestIntegrationFlow:
 
         # Login to verify account works
         login_data = {
-            'email': 'test@example.com',
+            'email': minimal_registration_data['email'],
             'password': minimal_registration_data['password1']
         }
         response = client.post(login_url, login_data, format='json')
@@ -270,7 +270,7 @@ class TestIntegrationFlow:
         response = client.post(register_url, valid_registration_data, format='json')
         assert response.status_code == status.HTTP_201_CREATED
 
-        user = User.objects.get(email='test@example.com')
+        user = User.objects.get(email=valid_registration_data['email'])
         email_address = EmailAddress.objects.get(email=user.email)
 
         # Verify profile data was saved correctly
