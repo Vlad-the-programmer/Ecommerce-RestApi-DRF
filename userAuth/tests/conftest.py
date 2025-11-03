@@ -1,7 +1,12 @@
 from django.utils import timezone
+from django.db.models.signals import post_save
+from django.conf import settings
+
+# All auth
 from allauth.account.models import EmailConfirmation, EmailAddress
 
 from common.tests.conftest import *
+from userAuth.signals import handle_user_creation
 from users.enums import Gender
 from users.models import Profile
 
@@ -143,21 +148,30 @@ def existing_user():
     """Create an existing user for duplicate tests."""
 
     def _create_user(email='existing@example.com', phone_number=None):
-        if phone_number is None:
-            phone_number = generate_valid_polish_phone_number()
+        # Disconnect the signal that sets is_active=False
+        post_save.disconnect(receiver=handle_user_creation, sender=settings.AUTH_USER_MODEL)
 
-        user = User.objects.create_user(
-            email=email,
-            first_name='Existing',
-            last_name='User',
-            password='password123'
-        )
-        Profile.objects.create(
-            user=user,
-            phone_number=phone_number,
-            date_of_birth='1990-01-01'
-        )
-        return user
+        try:
+
+            if phone_number is None:
+                phone_number = generate_valid_polish_phone_number()
+
+            user = User.objects.create_user(
+                email=email,
+                first_name='Existing',
+                last_name='User',
+                password='password123'
+            )
+            Profile.objects.create(
+                user=user,
+                phone_number=phone_number,
+                date_of_birth='1990-01-01'
+            )
+            return user
+
+        finally:
+            # Reconnect the signal
+            post_save.connect(handle_user_creation, sender=settings.AUTH_USER_MODEL)
 
     return _create_user
 
@@ -166,84 +180,76 @@ def existing_user():
 def verified_user(db, minimal_registration_data):
     """
     Create a fully verified user with active profile.
-    Returns:
-            tuple: A tuple containing the user, profile, email address, and confirmation.
     """
-    email = 'verified@example.com'
-    password = minimal_registration_data['password1']
 
-    # Create user
-    user = User.objects.create_user(
-        email=email,
-        first_name='Verified',
-        last_name='User',
-        password=password,
-        is_active=True
-    )
+    # Temporarily disconnect the signal
+    post_save.disconnect(receiver=handle_user_creation, sender=settings.AUTH_USER_MODEL)
 
-    # Create profile
-    profile = Profile.objects.create(
-        user=user,
-        phone_number=generate_valid_polish_phone_number(),
-        date_of_birth='1990-01-01',
-        gender=Gender.MALE,
-        country='US',
-        is_active=True
-    )
+    try:
+        email = 'verified@example.com'
+        password = minimal_registration_data['password1']
 
-    # Create verified email address
-    email_address = EmailAddress.objects.create(
-        user=user,
-        email=user.email,
-        primary=True,
-        verified=True
-    )
-
-    # Create confirmation
-    confirmation = EmailConfirmation.create(email_address)
-    confirmation.sent = timezone.now()
-    confirmation.save()
-
-    logger.debug("Created verified user: %s", user.email)
-
-    return user, profile, email_address, confirmation
-
-
-@pytest.fixture
-def admin_user():
-    """Create an admin user for testing privileged operations."""
-
-    def _create_user():
+        # Create user - this won't trigger the signal now
         user = User.objects.create_user(
-            email='admin@example.com',
-            first_name='Admin',
+            email=email,
+            first_name='Verified',
             last_name='User',
-            password='adminpass123',
-            is_active=True,
-            is_staff=True,
-            is_superuser=True
+            password=password,
+            is_active=True  # This will be respected
         )
 
-        Profile.objects.create(
+        # Create profile
+        profile = Profile.objects.create(
             user=user,
             phone_number=generate_valid_polish_phone_number(),
-            date_of_birth='1980-01-01',
+            date_of_birth='1990-01-01',
             gender=Gender.MALE,
             country='US',
             is_active=True
         )
 
-        EmailAddress.objects.create(
+        # Create verified email address
+        email_address = EmailAddress.objects.create(
             user=user,
             email=user.email,
             primary=True,
             verified=True
         )
 
-        logger.debug("Created admin user: %s", user.email)
-        return user
+        # Create confirmation
+        confirmation = EmailConfirmation.create(email_address)
+        confirmation.sent = timezone.now()
+        confirmation.save()
 
-    return _create_user
+        logger.debug(f"Verified user created - User is_active: {user.is_active}")
+        logger.debug(f"Profile is_active: {profile.is_active}")
+
+        return user, profile, email_address, confirmation
+
+    finally:
+        # Reconnect the signal
+        post_save.connect(handle_user_creation, sender=settings.AUTH_USER_MODEL)
+
+
+@pytest.fixture
+def admin_user(db):
+    """Create an admin user for testing."""
+    user = User.objects.create_superuser(
+        email='admin@example.com',
+        password='adminpass123',
+        first_name='Admin',
+        last_name='User'
+    )
+    return user
+
+
+@pytest.fixture
+def admin_client(admin_user):
+    """Create an authenticated admin client."""
+    from rest_framework.test import APIClient
+    client = APIClient()
+    client.force_authenticate(user=admin_user)
+    return client
 
 
 @pytest.fixture

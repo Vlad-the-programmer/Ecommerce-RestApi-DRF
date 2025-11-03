@@ -1,19 +1,26 @@
+import logging
+
 from django.db.models import Q
 from django.contrib.auth import logout
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 
 from rest_framework import viewsets, parsers
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated, IsAdminUser
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.request import Request
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 
+from users.permissions import IsProfileOwnerOrAdmin, IsProfileOwner
 from users.serializers import ProfileDetailsUpdateSerializer, UserDetailsSerializer
 from django.utils.translation import gettext_lazy as _
 
 from users.models import Profile
+
+
+logger = logging.getLogger(__name__)
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -22,28 +29,38 @@ class UserViewSet(viewsets.ModelViewSet):
     Handles: list/search, retrieve/update/delete (excludes create).
     """
     queryset = Profile.objects.all()
+    lookup_field = 'uuid'
+    lookup_url_kwarg = 'pk'
     serializer_class = ProfileDetailsUpdateSerializer
     parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
     http_method_names = ['get', 'put', 'patch', 'delete', 'head', 'options']  # Exclude 'post'
 
-    def get_serializer_class(self):
-        if self.action in ['update', 'partial_update']:
-            return ProfileDetailsUpdateSerializer
-        elif self.action in ['list', 'retrieve']:
-            return UserDetailsSerializer
-        return super().get_serializer_class()
-
     def get_permissions(self):
-        if self.action in ['retrieve', 'update', 'partial_update', 'destroy']:
-            return [IsAdminUser()]
-        elif self.action in ['list']:
+        """
+        Assign permissions based on action.
+        """
+        if self.action == 'list':
+            # Anyone can list users
             return [AllowAny()]
-        elif self.action in ['change_password']:
+        elif self.action in ['retrieve', 'update', 'partial_update', 'destroy']:
+            # Only profile owners or admins can access specific profiles
+            return [IsAuthenticated(), IsProfileOwnerOrAdmin()]
+        elif self.action in ['delete_profile']:
+            # Only profile owners can delete their own profile
+            return [IsAuthenticated(), IsProfileOwner()]
+        else:
             return [IsAuthenticated()]
-        return super().get_permissions()
 
     def get_queryset(self):
+        """
+        Get queryset with permission check.
+        """
         queryset = Profile.objects.all()
+
+        # If user is not staff, only show their own profile in detail views
+        if not self.request.user.is_staff and self.action in ['retrieve', 'update', 'partial_update', 'destroy']:
+            queryset = queryset.filter(user=self.request.user)
+
         search_query = self.request.query_params.get('search')
         if search_query:
             queryset = queryset.filter(
@@ -52,12 +69,48 @@ class UserViewSet(viewsets.ModelViewSet):
                 Q(user__last_name__icontains=search_query) |
                 Q(user__email__icontains=search_query)
             )
-        return queryset.order_by('-date_joined').only(
+        return queryset.order_by('-user__date_joined').only(
             'uuid', 'user__username', 'user__email', 'user__first_name', 'user__last_name',
             'user__date_joined', 'user__last_login', 'is_active', 'is_deleted', 'user__is_staff',
             'user__is_superuser', 'date_of_birth', 'gender', 'country', 'phone_number',
             'avatar', 'date_updated', 'date_created'
         )
+
+    def get_object(self):
+        """
+        Get object with permission check.
+        """
+        obj = super().get_object()
+
+        # Check object-level permissions
+        self.check_object_permissions(self.request, obj)
+
+        return obj
+
+    def perform_destroy(self, instance):
+        """
+        Soft delete both profile and user.
+        """
+        # Store user reference before deleting profile
+        user = instance.user
+
+        # Soft delete the profile
+        instance.delete()  # This calls CommonModel.delete()
+
+        # Now soft delete the user
+        if hasattr(user, 'delete') and callable(user.delete):
+            # If User inherits from CommonModel, use its delete method
+            user.delete()
+        else:
+            # Otherwise, manually set the fields
+            user.is_active = False
+            if hasattr(user, 'is_deleted'):
+                user.is_deleted = True
+            if hasattr(user, 'date_deleted'):
+                user.date_deleted = timezone.now()
+            user.save()
+
+        logger.debug(f"Soft deleted profile {instance.uuid} and user {user.email}")
 
     # Override create method to disable it
     def create(self, request, *args, **kwargs):
@@ -66,9 +119,9 @@ class UserViewSet(viewsets.ModelViewSet):
             status=status.HTTP_405_METHOD_NOT_ALLOWED
         )
 
-    @action(detail=True, methods=['delete'], url_path='delete-profile', permission_classes=[IsAuthenticated])
+    @action(detail=True, methods=['delete'], url_path='delete-profile')
     def delete_profile(self, request: Request, pk: str=None):
-        profile = get_object_or_404(Profile, pk=pk)
+        profile = self.get_object()
         self.perform_destroy(profile)
         logout(request)
         return Response({'detail': _('User deleted successfully.')}, status=status.HTTP_204_NO_CONTENT)

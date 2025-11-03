@@ -1,8 +1,11 @@
 import uuid
 
 from common.tests.conftest import *
+
 # Used in tests
-from userAuth.tests.conftest import verified_user, minimal_registration_data
+from userAuth.tests.conftest import (verified_user, minimal_registration_data,
+                                     existing_user, admin_user, multiple_verified_users,
+                                     )
 
 
 @pytest.fixture
@@ -22,3 +25,8 @@ def user_delete_profile_url():
         return reverse('users:user-delete-profile', kwargs={'pk': pk})
 
     return _get_url
+
+@pytest.fixture
+def user_list_url():
+    """URL for user list endpoint."""
+    return reverse('users:user-list')

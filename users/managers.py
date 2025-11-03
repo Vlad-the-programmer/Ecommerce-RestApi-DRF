@@ -15,7 +15,7 @@ class CustomUserManager(BaseUserManager):
 
     def get_queryset(self):
         """Default queryset excludes soft deleted users."""
-        return super().get_queryset().filter(is_deleted=False)
+        return super().get_queryset().select_related('profile').filter(is_deleted=False)
 
     def normalize_email(self, email):
         """

@@ -362,6 +362,12 @@ class ProfileDetailsUpdateSerializer(BaseUserProfileValidationSerializer, serial
                 attrs['user'] = {}
             attrs['user']['username'] = username
 
+    def validate_phone_number(self, value):
+        """Validate phone number."""
+        if value and Profile.objects.filter(phone_number=value).exists():
+            raise serializers.ValidationError("Phonenumber already exists.")
+        return value
+
     def update(self, instance, validated_data):
         """
         Update both profile and user data.

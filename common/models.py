@@ -1,11 +1,12 @@
 import logging
 import uuid
-from datetime import timezone
+
 from decimal import Decimal
 from typing import Optional
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 from django_countries.fields import CountryField
@@ -13,6 +14,7 @@ from phonenumber_field.modelfields import PhoneNumberField
 
 from cart.managers import CartItemManager
 from common.managers import NonDeletedObjectsManager
+
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +53,16 @@ class CommonModel(models.Model):
             return  # Already deleted
 
         self.is_deleted = True
+        self.is_active = False
         self.date_deleted = timezone.now()
-        self.save(update_fields=["is_deleted", "date_deleted"])
+        self.save(update_fields=["is_deleted", "is_active", "date_deleted"])
 
         # Soft cascade: mark related CASCADE FKs as deleted too
         for rel in self._meta.related_objects:
             if rel.on_delete == models.CASCADE:
                 related_manager = getattr(self, rel.get_accessor_name(), None)
-                if related_manager:
+                if related_manager and hasattr(related_manager, 'all'):
+                    # Only call .all() if it's a manager (not a single related object)
                     qs = related_manager.all()
                     for obj in qs:
                         if isinstance(obj, CommonModel):

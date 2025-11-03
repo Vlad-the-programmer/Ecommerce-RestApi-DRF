@@ -13,8 +13,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
 
-from users.models import Gender
-
+from users.models import Gender, Profile
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -247,6 +246,8 @@ class VerifyEmailView(BaseVerifyEmailView):
             user = confirmation.email_address.user
             user.is_active = True
             user.save()
+
+            Profile.objects.filter(user=user).update(is_active=True)
 
             # Activate profile if it exists
             if hasattr(user, 'profile'):
