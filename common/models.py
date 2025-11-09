@@ -13,14 +13,14 @@ from django_countries.fields import CountryField
 from phonenumber_field.modelfields import PhoneNumberField
 
 from cart.managers import CartItemManager
-from common.managers import NonDeletedObjectsManager
+from common.managers import SoftDeleteManger
 
 
 logger = logging.getLogger(__name__)
 
 
 class CommonModel(models.Model):
-    objects = NonDeletedObjectsManager()
+    objects = SoftDeleteManger()
     all_objects = models.Manager()
 
     uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
@@ -67,6 +67,16 @@ class CommonModel(models.Model):
                     for obj in qs:
                         if isinstance(obj, CommonModel):
                             obj.delete()
+
+    def hard_delete(self, *args, **kwargs):
+        return super().delete(*args, **kwargs)
+
+    def restore(self):
+        """Restore soft-deleted instance"""
+        self.is_deleted = False
+        self.is_active = True
+        self.deleted_at = None
+        self.save()
 
 
 class AuthCommonModel(CommonModel):

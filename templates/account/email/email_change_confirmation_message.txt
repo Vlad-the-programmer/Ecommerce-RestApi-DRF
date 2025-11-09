@@ -1,0 +1,27 @@
+{% load i18n %}
+
+{% blocktrans with username=user.username %}Hello {{ username }},{% endblocktrans %}
+
+{% trans "You have requested to change your email address from:" %}
+{{ current_email }}
+{% trans "to:" %}
+{{ new_email }}
+
+{% trans "Account Details:" %}
+- {% trans "Username" %}: {{ user.username }}
+- {% trans "Request Date" %}: {% now "F j, Y, g:i a" %}
+
+{% trans "To confirm this change, please click the link below:" %}
+{{ confirm_url }}
+
+{% trans "Important:" %}
+- {% trans "This link expires in 24 hours" %}
+- {% trans "If you didn't request this change, please ignore this email" %}
+
+{% trans "If the link doesn't work, copy and paste this URL into your browser:" %}
+{{ confirm_url }}
+
+Thank you,
+The {{ site_name }} Team
+
+This is an automated message, please do not reply.

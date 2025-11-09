@@ -1,11 +1,16 @@
 import logging
 
+from drf_spectacular.utils import extend_schema, OpenApiResponse
+
 from django.db.models import Q
 from django.contrib.auth import logout
-from django.shortcuts import get_object_or_404
+from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
+from django.contrib.auth import get_user_model
 
-from rest_framework import viewsets, parsers
+from rest_framework.generics import CreateAPIView
+
+from rest_framework import viewsets, parsers, serializers
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -13,14 +18,18 @@ from rest_framework.request import Request
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 
-from users.permissions import IsProfileOwnerOrAdmin, IsProfileOwner
-from users.serializers import ProfileDetailsUpdateSerializer, UserDetailsSerializer
-from django.utils.translation import gettext_lazy as _
+from .permissions import IsProfileOwnerOrAdmin, IsProfileOwner
+from .serializers import (
+    ProfileDetailsUpdateSerializer,
+    EmailChangeRequestSerializer,
+    EmailChangeConfirmSerializer
+)
 
-from users.models import Profile
+from .models import Profile
 
 
 logger = logging.getLogger(__name__)
+User = get_user_model()
 
 
 class UserViewSet(viewsets.ModelViewSet):
@@ -125,3 +134,70 @@ class UserViewSet(viewsets.ModelViewSet):
         self.perform_destroy(profile)
         logout(request)
         return Response({'detail': _('User deleted successfully.')}, status=status.HTTP_204_NO_CONTENT)
+
+
+class EmailChangeRequestView(CreateAPIView):
+    """
+    Request to change user email address.
+    Sends confirmation email to the new address.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = EmailChangeRequestSerializer
+
+    @extend_schema(
+        request=EmailChangeRequestSerializer,
+        responses={
+            200: OpenApiResponse(description="Confirmation email sent to new address"),
+            400: OpenApiResponse(description="Invalid input"),
+        }
+    )
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            result = serializer.save()
+            return Response(result, status=status.HTTP_200_OK)
+        except serializers.ValidationError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+
+class EmailChangeConfirmView(CreateAPIView):
+    """
+    Confirm email change using token from confirmation email.
+    """
+    serializer_class = EmailChangeConfirmSerializer
+
+    @extend_schema(
+        request=EmailChangeConfirmSerializer,
+        responses={
+            200: OpenApiResponse(description="Email changed successfully"),
+            400: OpenApiResponse(description="Invalid token or email"),
+        }
+    )
+    def create(self, request, uidb64, email_b64, token, *args, **kwargs):
+        # Pass URL parameters to serializer
+        data = {
+            'uidb64': uidb64,
+            'email_b64': email_b64,
+            'token': token
+        }
+
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            result = serializer.save()
+            return Response(
+                {"detail": result["detail"]},
+                status=status.HTTP_200_OK
+            )
+        except serializers.ValidationError as e:
+            return Response(
+                {"detail": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+

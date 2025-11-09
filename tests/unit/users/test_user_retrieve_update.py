@@ -3,7 +3,7 @@ import pytest
 from django.contrib.auth import get_user_model
 from rest_framework import status
 from users.models import Profile
-from users.enums import Gender
+
 
 logger = logging.getLogger(__name__)
 User = get_user_model()

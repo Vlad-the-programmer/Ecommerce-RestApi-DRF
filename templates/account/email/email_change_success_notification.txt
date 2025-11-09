@@ -1,0 +1,29 @@
+{% trans "EMAIL CHANGE SUCCESSFUL" %}
+===================================
+
+✓ {% trans "SUCCESS!" %}
+{% trans "Your email address has been successfully updated." %}
+
+{% trans "Hello" %} {{ user.username }},
+
+{% trans "We're writing to confirm that your email address has been successfully changed." %}
+
+{% trans "ACCOUNT DETAILS" %}
+-------------------
+{% trans "Old Email:" %} {{ old_email }}
+{% trans "New Email:" %} {{ new_email }}
+{% trans "Change Date:" %} {% now "F j, Y, g:i a" %}
+
+{% trans "SECURITY NOTICE" %}
+-------------------
+{% trans "If you did not make this change, please contact our support team immediately as your account security may be compromised." %}
+
+{% trans "All future communications and notifications will be sent to your new email address." %}
+
+{% trans "Thank you for keeping your account information up to date!" %}
+
+{% trans "Best regards," %}
+{{ site_name }} {% trans "Team" %}
+
+--
+{% trans "This is an automated message, please do not reply to this email." %}

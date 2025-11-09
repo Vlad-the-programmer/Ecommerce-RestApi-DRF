@@ -4,7 +4,7 @@ from psycopg2 import IntegrityError
 from django.contrib.auth.models import BaseUserManager
 from django.utils.translation import gettext_lazy as _
 
-from common.managers import NonDeletedObjectsManager
+from common.managers import SoftDeleteManger
 from users.enums import UserRole, user_roles_descriptions
 
 
@@ -166,7 +166,7 @@ class CustomUserManager(BaseUserManager):
         )
 
 
-class ProfileManager(NonDeletedObjectsManager):
+class ProfileManager(SoftDeleteManger):
     def get_queryset(self):
         return (super().get_queryset()
                     .select_related('user'))

@@ -1,0 +1,127 @@
+{% load i18n %}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% trans "Email Change Successful" %}</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .header {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }
+        .success-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        .content {
+            padding: 40px 30px;
+        }
+        .success-box {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .info-box {
+            background: #e7f3ff;
+            border-left: 4px solid #007bff;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .footer {
+            background: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            color: #6c757d;
+            font-size: 14px;
+        }
+        .security-notice {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        @media only screen and (max-width: 600px) {
+            .container {
+                margin: 10px;
+                border-radius: 0;
+            }
+            .content {
+                padding: 20px 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="success-icon">✓</div>
+            <h1>{% trans "Email Change Successful" %}</h1>
+        </div>
+
+        <div class="content">
+            <div class="success-box">
+                <h2 style="margin: 0; color: #155724;">{% trans "Success!" %}</h2>
+                <p style="margin: 10px 0 0 0;">{% trans "Your email address has been successfully updated." %}</p>
+            </div>
+
+            <p>{% trans "Hello" %} <strong>{{ user.username }}</strong>,</p>
+
+            <p>{% trans "We're writing to confirm that your email address has been successfully changed from:" %}</p>
+
+            <div class="info-box">
+                <p><strong>{% trans "Old Email:" %}</strong> {{ old_email }}</p>
+                <p><strong>{% trans "New Email:" %}</strong> {{ new_email }}</p>
+                <p><strong>{% trans "Change Date:" %}</strong> {% now "F j, Y, g:i a" %}</p>
+            </div>
+
+            <div class="security-notice">
+                <p><strong>{% trans "Security Notice:" %}</strong></p>
+                <p>{% trans "If you did not make this change, please contact our support team immediately as your account security may be compromised." %}</p>
+            </div>
+
+            <p>{% trans "All future communications and notifications will be sent to your new email address." %}</p>
+
+            <p>{% trans "Thank you for keeping your account information up to date!" %}</p>
+        </div>
+
+        <div class="footer">
+            <p>{% trans "Best regards," %}</p>
+            <p><strong>{{ site_name }}</strong> {% trans "Team" %}</p>
+            <p style="margin-top: 15px; font-size: 12px; color: #adb5bd;">
+                {% trans "This is an automated message, please do not reply to this email." %}
+            </p>
+        </div>
+    </div>
+</body>
+</html>

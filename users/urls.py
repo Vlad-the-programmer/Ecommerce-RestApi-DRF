@@ -1,7 +1,9 @@
 from django.urls import path
-from .views import UserViewSet
+from .views import UserViewSet, EmailChangeRequestView, EmailChangeConfirmView
+
 
 app_name = 'users'
+
 
 urlpatterns = [
     # List users (admin only)
@@ -21,4 +23,9 @@ urlpatterns = [
          UserViewSet.as_view({'delete': 'delete_profile'}), 
          name='user-delete-profile'),
 
+    # Email change endpoints
+    path('email/change/', EmailChangeRequestView.as_view(), name='email_change_request'),
+    path('email/change/confirm/<uidb64>/<email_b64>/<token>/',
+         EmailChangeConfirmView.as_view(),
+         name='email_change_confirm'),
 ]

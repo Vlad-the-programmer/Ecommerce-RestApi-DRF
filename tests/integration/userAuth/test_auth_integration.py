@@ -14,7 +14,7 @@ User = get_user_model()
 pytestmark = pytest.mark.django_db
 
 
-class TestIntegrationFlow:
+class TestAuthIntegrationFlow:
     """Integration tests for the complete registration and verification flow."""
 
     def test_complete_registration_verification_login_flow(self, client, minimal_registration_data, register_url,

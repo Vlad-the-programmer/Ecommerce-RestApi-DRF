@@ -1,0 +1,2 @@
+{% load i18n %}
+{% blocktrans %}Your Email Has Been Successfully Updated - {{ site_name }}{% endblocktrans %}

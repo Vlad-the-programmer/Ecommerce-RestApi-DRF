@@ -9,16 +9,25 @@ from dj_rest_auth.serializers import UserDetailsSerializer
 # OpenApi
 from drf_spectacular.utils import extend_schema_serializer, OpenApiExample
 
-from django.contrib.auth import get_user_model
+# Countries
 from django_countries.serializer_fields import CountryField
+
 from django.core.validators import FileExtensionValidator
+from django.core.validators import validate_email
+from django.core.exceptions import ValidationError
+from django.utils.translation import gettext_lazy as _
+from django.utils.encoding import force_str
+from django.utils.http import urlsafe_base64_decode
+from django.contrib.auth.tokens import default_token_generator
+from django.contrib.auth import get_user_model
 
 # Phone number
 from phonenumber_field.serializerfields import PhoneNumberField
 
 from common.validators import FileSizeValidator as CustomFileSizeValidator
-from users.enums import Gender
-from users.models import Profile
+from .enums import Gender
+from .models import Profile
+from .utils import send_email_change_confirmation, send_email_change_success_notification
 
 
 logger = logging.getLogger(__name__)
@@ -393,3 +402,134 @@ class ProfileDetailsUpdateSerializer(BaseUserProfileValidationSerializer, serial
         instance.save()
 
         return instance
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            'Email Change Request Example',
+            value={
+                'new_email': 'new_email@example.com',
+            },
+            request_only=True,
+            description='Request to change email address'
+    ),
+])
+class EmailChangeRequestSerializer(serializers.Serializer):
+    new_email = serializers.EmailField(required=True)
+
+    def validate_new_email(self, value):
+        try:
+            validate_email(value)
+        except ValidationError:
+            raise serializers.ValidationError(_("Enter a valid email address."))
+
+        # Check if new email is same as current email
+        request = self.context.get('request')
+        if request and request.user.email == value:
+            raise serializers.ValidationError(
+                _("New email address cannot be the same as current email.")
+            )
+
+        # Check if new email is already in use
+        if User.objects.filter(email=value).exclude(pk=request.user.pk).exists():
+            raise serializers.ValidationError(
+                _("This email address is already in use.")
+            )
+
+        return value
+
+    def save(self, **kwargs):
+        request = self.context.get('request')
+        user = request.user
+        new_email = self.validated_data['new_email']
+
+        # Send confirmation email
+        if send_email_change_confirmation(user, new_email, request):
+            return {"detail": _("Confirmation email has been sent to your new email address.")}
+        else:
+            raise serializers.ValidationError(
+                _("Failed to send confirmation email. Please try again.")
+            )
+
+
+@extend_schema_serializer(
+    examples=[
+        OpenApiExample(
+            'Email Change Confirm Example',
+            value={
+                'uidb64': 'your_uidb64_value',
+                'email_b64': 'your_email_b64_value',
+                'token': 'your_token_value',
+            },
+            request_only=True,
+            description='Confirm email change'
+        ),
+    ],
+    component_name='EmailChangeConfirm'
+)
+class EmailChangeConfirmSerializer(serializers.Serializer):
+    """
+    Serializer for email change confirmation.
+    """
+    # These fields will come from URL parameters, not request body
+    uidb64 = serializers.CharField(write_only=True)
+    email_b64 = serializers.CharField(write_only=True)
+    token = serializers.CharField(write_only=True)
+
+    def validate(self, attrs):
+        uidb64 = attrs.get('uidb64')
+        email_b64 = attrs.get('email_b64')
+        token = attrs.get('token')
+
+        try:
+            # Decode user ID
+            uid = force_str(urlsafe_base64_decode(uidb64))
+            user = User.objects.get(pk=uid)
+
+            # Decode new email
+            new_email = force_str(urlsafe_base64_decode(email_b64))
+
+            # Verify token
+            if not default_token_generator.check_token(user, token):
+                raise serializers.ValidationError(
+                    _("Invalid or expired confirmation link.")
+                )
+
+            # Check if email is still available
+            if User.objects.filter(email=new_email).exclude(pk=user.pk).exists():
+                raise serializers.ValidationError(
+                    _("This email address is already in use.")
+                )
+
+            # Store validated data for save method
+            attrs['user'] = user
+            attrs['new_email'] = new_email
+            attrs['old_email'] = user.email
+
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            raise serializers.ValidationError(
+                _("Invalid confirmation link.")
+            )
+
+        return attrs
+
+    def save(self, **kwargs):
+        user = self.validated_data['user']
+        new_email = self.validated_data['new_email']
+        old_email = self.validated_data['old_email']
+
+        # Update user email
+        user.email = new_email
+        user.save()
+
+        logger.info(f"Email changed for user {user.username} from {old_email} to {new_email}")
+
+        # Send success notification to the new email
+        request = self.context.get('request')
+        send_email_change_success_notification(user, old_email, new_email, request)
+
+        return {
+            "detail": _("Email address has been successfully updated."),
+            "user": user
+        }

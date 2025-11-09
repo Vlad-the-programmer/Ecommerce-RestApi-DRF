@@ -209,12 +209,6 @@ REST_AUTH = {
 }
 
 
-# Add Token Authentication to default authentication classes
-REST_FRAMEWORK['DEFAULT_AUTHENTICATION_CLASSES'] = [
-    'rest_framework.authentication.TokenAuthentication',
-    'rest_framework.authentication.SessionAuthentication',
-]
-
 # Logging configuration
 LOGGING = {
     'version': 1,
@@ -260,10 +254,11 @@ LOGGING = {
     },
 }
 
+
 # JWT Auth
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=1) if DEBUG else timedelta(minutes=60),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1) if DEBUG else timedelta(days=7),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': True,
@@ -288,6 +283,7 @@ SIMPLE_JWT = {
     'SLIDING_TOKEN_LIFETIME': timedelta(minutes=5),
     'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
 }
+
 
 SPECTACULAR_SETTINGS = {
     # Basic settings
@@ -379,11 +375,13 @@ SPECTACULAR_SETTINGS = {
 }
 
 
+from django.urls import reverse_lazy
+
 # All auth
-LOGIN_URL = '/api/auth/dj_rest_auth/login/'
-LOGOUT_REDIRECT_URL = '/api/auth/dj_rest_auth/login/'
-ACCOUNT_EMAIL_CONFIRMATION_AUTHENTICATED_REDIRECT_URL = '/api/auth/dj_rest_auth/login/'
-ACCOUNT_EMAIL_CONFIRMATION_ANONYMOUS_REDIRECT_URL = '/api/auth/dj_rest_auth/login/'
+LOGIN_URL = reverse_lazy('userAuth:rest_login')
+LOGOUT_REDIRECT_URL = LOGIN_URL
+ACCOUNT_EMAIL_CONFIRMATION_AUTHENTICATED_REDIRECT_URL = LOGIN_URL
+ACCOUNT_EMAIL_CONFIRMATION_ANONYMOUS_REDIRECT_URL = LOGIN_URL
 ACCOUNT_EMAIL_VERIFICATION = "mandatory"
 ACCOUNT_CONFIRM_EMAIL_ON_GET = True
 ACCOUNT_EMAIL_CONFIRMATION_EXPIRE_DAYS = 1

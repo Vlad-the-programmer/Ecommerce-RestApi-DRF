@@ -3,11 +3,11 @@ from datetime import timezone
 from django.db import models
 from django.db.models import Count, Q, Avg
 
-from common.managers import NonDeletedObjectsManager
+from common.managers import SoftDeleteManger
 from products.enums import ProductStatus, StockStatus, ProductLabel
 
 
-class ProductVariantManager(NonDeletedObjectsManager):
+class ProductVariantManager(SoftDeleteManger):
     """
     Manager for size-color variant queries.
     """
@@ -15,7 +15,7 @@ class ProductVariantManager(NonDeletedObjectsManager):
         return super().get_queryset().filter(is_active=True).select_related('product')
 
 
-class ProductManager(NonDeletedObjectsManager):
+class ProductManager(SoftDeleteManger):
     """
     Main product manager with common product queries.
     """
@@ -91,7 +91,7 @@ class ProductManager(NonDeletedObjectsManager):
         )
 
 
-class ProductReportManager(NonDeletedObjectsManager):
+class ProductReportManager(SoftDeleteManger):
     """
     Manager for product analytics and reporting.
     """
@@ -124,7 +124,7 @@ class ProductReportManager(NonDeletedObjectsManager):
         )
 
 
-class ProductAdminManager(NonDeletedObjectsManager):
+class ProductAdminManager(SoftDeleteManger):
     """
     Manager for admin-specific product queries.
     """

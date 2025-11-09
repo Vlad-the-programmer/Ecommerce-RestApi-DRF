@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 
 from rest_framework import parsers
 
+from dj_rest_auth.views import UserDetailsView
 from dj_rest_auth.registration.views import (
      RegisterView as DjRestAuthRegisterView,
     VerifyEmailView as BaseVerifyEmailView
@@ -11,9 +12,10 @@ from dj_rest_auth.registration.views import (
 from allauth.account.models import EmailConfirmation
 from rest_framework.response import Response
 from rest_framework import status
-from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse
+from drf_spectacular.utils import extend_schema, OpenApiExample, OpenApiResponse, extend_schema_view
 
 from users.models import Gender, Profile
+
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -276,3 +278,27 @@ class VerifyEmailView(BaseVerifyEmailView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+@extend_schema_view(
+    get=extend_schema(description="Get current user details"),
+)
+class CustomUserDetailsView(UserDetailsView):
+    """
+    Custom user details view that only allows GET requests.
+
+    Returns UserModel fields.
+    """
+    http_method_names = ['get', 'options', 'head']
+
+    def patch(self, request, *args, **kwargs):
+        return Response(
+            {"detail": "Method \"PATCH\" not allowed."},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED
+        )
+
+    def put(self, request, *args, **kwargs):
+        return Response(
+            {"detail": "Method \"PUT\" not allowed."},
+            status=status.HTTP_405_METHOD_NOT_ALLOWED
+        )

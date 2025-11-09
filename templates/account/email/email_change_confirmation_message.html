@@ -1,0 +1,166 @@
+{% load i18n %}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% trans "Email Change Confirmation" %}</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: #ffffff;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }
+        .content {
+            padding: 40px 30px;
+        }
+        .info-box {
+            background: #f8f9fa;
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .button {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            padding: 12px 30px;
+            border-radius: 5px;
+            font-weight: 600;
+            margin: 20px 0;
+            text-align: center;
+        }
+        .footer {
+            background: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            color: #6c757d;
+            font-size: 14px;
+        }
+        .warning {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            color: #856404;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .user-info {
+            background: #e7f3ff;
+            border: 1px solid #b3d9ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .email-change {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 20px 0;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .arrow {
+            margin: 0 20px;
+            color: #667eea;
+            font-size: 24px;
+        }
+        @media only screen and (max-width: 600px) {
+            .container {
+                margin: 10px;
+                border-radius: 0;
+            }
+            .content {
+                padding: 20px 15px;
+            }
+            .email-change {
+                flex-direction: column;
+            }
+            .arrow {
+                margin: 10px 0;
+                transform: rotate(90deg);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{% trans "Email Change Request" %}</h1>
+        </div>
+
+        <div class="content">
+            <p>{% trans "Hello" %} <strong>{{ user.username }}</strong>,</p>
+
+            <p>{% trans "You have requested to change the email address associated with your account." %}</p>
+
+            <div class="email-change">
+                <div class="old-email" style="color: #dc3545;">
+                    {{ current_email }}
+                </div>
+                <div class="arrow">→</div>
+                <div class="new-email" style="color: #28a745;">
+                    {{ new_email }}
+                </div>
+            </div>
+
+            <div class="user-info">
+                <p><strong>{% trans "Account Details:" %}</strong></p>
+                <p>{% trans "Username:" %} <strong>{{ user.username }}</strong></p>
+                <p>{% trans "Request Date:" %} <strong>{% now "F j, Y, g:i a" %}</strong></p>
+            </div>
+
+            <p>{% trans "To confirm this change and update your email address, please click the button below:" %}</p>
+
+            <div style="text-align: center;">
+                <a href="{{ confirm_url }}" class="button">
+                    {% trans "Confirm Email Change" %}
+                </a>
+            </div>
+
+            <div class="warning">
+                <p><strong>{% trans "Important:" %}</strong></p>
+                <p>{% trans "This link will expire in 24 hours for security reasons." %}</p>
+                <p>{% trans "If you didn't request this change, please ignore this email and your current email will remain unchanged." %}</p>
+            </div>
+
+            <p>{% trans "If the button above doesn't work, you can copy and paste the following link into your browser:" %}</p>
+            <p style="word-break: break-all; color: #667eea;">
+                <a href="{{ confirm_url }}" style="color: #667eea;">{{ confirm_url }}</a>
+            </p>
+        </div>
+
+        <div class="footer">
+            <p>{% trans "Thank you for using our service!" %}</p>
+            <p>{% trans "The" %} <strong>{{ site_name }}</strong> {% trans "Team" %}</p>
+            <p style="margin-top: 15px; font-size: 12px; color: #adb5bd;">
+                {% trans "This is an automated message, please do not reply to this email." %}
+            </p>
+        </div>
+    </div>
+</body>
+</html>

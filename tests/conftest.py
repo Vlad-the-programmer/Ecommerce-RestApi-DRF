@@ -1,11 +1,24 @@
+import logging
+
+import pytest
+import uuid
+
 from django.utils import timezone
 from django.db.models.signals import post_save
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core.management import call_command
+
+from io import BytesIO
+from PIL import Image
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.urls import reverse
+import random
+import string
 
 # All auth
 from allauth.account.models import EmailConfirmation, EmailAddress
 
-from common.tests.conftest import *
 from userAuth.signals import handle_user_creation
 from users.enums import Gender
 from users.models import Profile
@@ -14,6 +27,76 @@ from users.models import Profile
 logger = logging.getLogger(__name__)
 
 User = get_user_model()
+
+
+def generate_valid_polish_phone_number():
+    """Generate a valid Polish phone number for tests."""
+    # Polish mobile numbers: +48 XXX XXX XXX
+    prefixes = ['50', '51', '53', '57', '60', '66', '69', '72', '73', '78', '79', '88']
+    prefix = random.choice(prefixes)
+    number = ''.join(random.choices(string.digits, k=7))
+    return f'+48{prefix}{number}'
+
+
+@pytest.fixture(autouse=True)
+def setup_site(db):
+    """Ensure test site exists for allauth."""
+    from django.contrib.sites.models import Site
+
+    site, created = Site.objects.get_or_create(
+        id=1,
+        defaults={
+            'domain': 'testserver',
+            'name': 'Test Server'
+        }
+    )
+    if not created:
+        site.domain = 'testserver'
+        site.name = 'Test Server'
+        site.save()
+
+
+@pytest.fixture(scope='session')
+def django_db_setup(django_db_setup, django_db_blocker):
+    """Ensure clean database setup for tests."""
+    with django_db_blocker.unblock():
+        call_command('migrate', '--run-syncdb')
+
+
+@pytest.fixture(autouse=True)
+def enable_db_access_for_all_tests(db):
+    """Enable database access for all tests."""
+    pass
+
+
+@pytest.fixture
+def client():
+    """Django test client fixture."""
+    from rest_framework.test import APIClient
+    return APIClient()
+
+
+@pytest.fixture
+def authenticated_client(client, verified_user):
+    """Create a client authenticated with a verified user."""
+    user, _, _, _ = verified_user
+    client.force_authenticate(user=user)
+    return client
+
+
+@pytest.fixture
+def test_image():
+    """Create a test image for avatar uploads."""
+    file = BytesIO()
+    image = Image.new('RGB', (100, 100), color='red')
+    image.save(file, 'JPEG')
+    file.name = 'test.jpg'
+    file.seek(0)
+    return SimpleUploadedFile(
+        name='test.jpg',
+        content=file.read(),
+        content_type='image/jpeg'
+    )
 
 
 @pytest.fixture
@@ -322,3 +405,49 @@ def logout_url():
 @pytest.fixture
 def token_verify_url():
     return reverse('userAuth:token_verify')
+
+
+@pytest.fixture
+def login_url():
+    return reverse('userAuth:rest_login')
+
+
+@pytest.fixture
+def user_details_url():
+    # return reverse('userAuth:rest_user_details') # Use custom UserViewSet method instead
+    def _get_url(pk:uuid.UUID=None):
+        if pk is None:
+            return ""
+        return reverse('users:user-detail', kwargs={'pk': pk})
+    return _get_url
+
+
+@pytest.fixture
+def user_delete_profile_url():
+    def _get_url(pk: uuid.UUID = None):
+        if pk is None:
+            return ""
+        return reverse('users:user-delete-profile', kwargs={'pk': pk})
+
+    return _get_url
+
+
+@pytest.fixture
+def user_list_url():
+    """URL for user list endpoint."""
+    return reverse('users:user-list')
+
+
+@pytest.fixture
+def email_change_request_url():
+    from django.urls import reverse
+    return reverse('users:email_change_request')
+
+
+@pytest.fixture
+def email_change_confirm_url():
+    from django.urls import reverse
+    def _url(uidb64, email_b64, token):
+        return reverse('users:email_change_confirm', args=[uidb64, email_b64, token])
+
+    return _url
