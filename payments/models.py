@@ -3,20 +3,23 @@ from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from common.models import CommonModel
 from payments.enums import PaymentMethod, PaymentStatus
+from payments.managers import PaymentManager
 
 
 class Payment(CommonModel):
     """
     Represents a payment made toward an invoice.
     """
+    objects = PaymentManager()
 
     invoice = models.ForeignKey(
         "invoices.Invoice",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="payments",
         verbose_name=_("Invoice"),
         help_text=_("Invoice associated with this payment."),
@@ -118,7 +121,7 @@ class Payment(CommonModel):
 
             # Completed payments must have confirmed_at timestamp
             models.CheckConstraint(
-                check=~Q(status="COMPLETED") | Q(confirmed_at__isnull=False),
+                check=~Q(status=PaymentStatus.COMPLETED) | Q(confirmed_at__isnull=False),
                 name="payment_confirmed_at_required_for_completed"
             ),
         ]
@@ -139,30 +142,37 @@ class Payment(CommonModel):
     def __str__(self):
         return f"Payment {self.payment_reference} ({self.amount} {self.currency}) - {self.status}"
 
+    def delete(self, *args, **kwargs):
+        if self.is_successful:
+            raise ValidationError("Cannot delete payment with completed status")
+
+        super().delete(*args, **kwargs)
+
     @property
     def is_successful(self):
         """Returns True if payment is successful."""
         return self.status == PaymentStatus.COMPLETED
 
-    def mark_completed(self):
+    def mark_completed(self, confirmed_at=None):
         """Mark the payment as completed."""
         self.status = PaymentStatus.COMPLETED
-        self.save(update_fields=["status"])
+        self.confirmed_at = confirmed_at or timezone.now()
+        self.save(update_fields=["status", "confirmed_at", "date_updated"])
 
     def mark_failed(self):
         """Mark the payment as failed."""
         self.status = PaymentStatus.FAILED
-        self.save(update_fields=["status"])
+        self.save(update_fields=["status", "date_updated"])
 
     def mark_refunded(self):
         """Mark the payment as refunded."""
         self.status = PaymentStatus.REFUNDED
-        self.save(update_fields=["status"])
+        self.save(update_fields=["status", "date_updated"])
 
     def mark_cancelled(self):
         """Mark the payment as cancelled."""
         self.status = PaymentStatus.CANCELLED
-        self.save(update_fields=["status"])
+        self.save(update_fields=["status", "date_updated"])
 
     def clean(self):
         """Business rule validations."""
@@ -171,7 +181,11 @@ class Payment(CommonModel):
         if self.amount < 0:
             raise ValidationError({"amount": _("Payment amount cannot be negative.")})
 
-        if self.status == self.Status.COMPLETED and not self.confirmed_at:
+        if self.status == PaymentStatus.COMPLETED and not self.confirmed_at:
             raise ValidationError({
                 "confirmed_at": _("Completed payments must have a confirmation timestamp.")
             })
+
+        # Ensure invoice is not deleted
+        if self.invoice_id and self.invoice.is_deleted:
+            raise ValidationError(_("Cannot create payment for deleted invoice."))

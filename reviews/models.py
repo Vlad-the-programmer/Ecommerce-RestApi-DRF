@@ -6,15 +6,18 @@ from django.utils.translation import gettext_lazy as _
 from decimal import Decimal
 
 from common.models import CommonModel
+from reviews.managers import ReviewManager
 from reviews.utils import get_stars_for_rating
 
 
 class Review(CommonModel):
     """User review for a product."""
+    objects = ReviewManager()
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
         related_name="reviews",
         verbose_name=_("User"),
         help_text=_("The user who wrote the review."),
@@ -22,7 +25,7 @@ class Review(CommonModel):
 
     product = models.ForeignKey(
         "products.Product",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="reviews",
         verbose_name=_("Product"),
         help_text=_("The product this review refers to."),

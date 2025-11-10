@@ -3,8 +3,12 @@ from datetime import datetime
 from django.conf import settings
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+from django.core.validators import MinValueValidator
+from decimal import Decimal
 
-from .managers import CartManager, NonExpiredOrDeletedCouponManager
+from rest_framework.exceptions import ValidationError
+
+from .managers import CartManager, CouponManager, CartItemManager, SavedCartManager
 from common.models import CommonModel, ItemCommonModel
 from .enums import CART_STATUSES
 
@@ -13,7 +17,7 @@ class Coupon(CommonModel):
     """
     Coupon model with relation to Cart to keep track of coupons in the cart.
     """
-    objects = NonExpiredOrDeletedCouponManager()
+    objects = CouponManager()
 
     coupon_code = models.CharField(max_length=10)
     is_expired = models.BooleanField(default=False)
@@ -33,7 +37,7 @@ class Coupon(CommonModel):
         ordering = ["-expiration_date"]
         indexes = CommonModel.Meta.indexes + [
             # Core manager index pattern
-            models.Index(fields=["is_deleted", "is_expired"]),  # For NonExpiredOrDeletedCouponManager
+            models.Index(fields=["is_deleted", "is_expired"]),  # For CouponManager
 
             # Common lookup patterns
             models.Index(fields=["coupon_code", "is_deleted", "is_expired"]),  # Code validation
@@ -51,13 +55,17 @@ class Coupon(CommonModel):
             ),
         ]
 
-    def is_valid(self):
+    def is_valid(self, cart_total: float = None):
         """Comprehensive validation"""
+        if self.is_deleted:
+            return False
         if self.is_expired:
             return False
         if datetime.now() > self.expiration_date:
             return False
         if self.used_count >= self.usage_limit:
+            return False
+        if cart_total and cart_total < self.minimum_amount:
             return False
         return True
 
@@ -69,10 +77,10 @@ class Coupon(CommonModel):
 class Cart(CommonModel):
     objects = CartManager()
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name="cart", null=True, blank=True)
     coupon = models.ForeignKey(Coupon, on_delete=models.SET_NULL, null=True, blank=True)
-    status = models.CharField(max_length=20, choices=CART_STATUSES, default=CART_STATUSES.ACTIVE)
+    status = models.CharField(max_length=20, choices=CART_STATUSES.choices, default=CART_STATUSES.ACTIVE)
 
     def __str__(self):
         return f"Cart {self.id}"
@@ -93,6 +101,21 @@ class Cart(CommonModel):
             models.Index(fields=["status", "date_created"]),  # Status changes over time
         ]
 
+    def can_be_deleted(self):
+        """Check if cart can be safely soft-deleted."""
+        if self.status == CART_STATUSES.ACTIVE:
+            return False  # Active carts shouldn't be deleted
+        if self.cart_items.filter(is_deleted=False).exists():
+            return False  # Carts with items shouldn't be deleted
+        return True
+
+    def delete(self, *args, **kwargs):
+        """Override delete to handle cart deletion logic."""
+        if not self.can_be_deleted():
+            raise ValidationError(
+                _("Cannot delete active cart or cart with items. Please clear cart first.")
+            )
+        super().delete(*args, **kwargs)
 
     def get_cart_total(self):
         cart_items = self.cart_items.all()
@@ -118,7 +141,9 @@ class CartItem(ItemCommonModel):
     """
     CartItem model with relation to Cart to keep track of items in the cart.
     """
-    cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="cart_items")
+    objects = CartItemManager()
+
+    cart = models.ForeignKey(Cart, on_delete=models.PROTECT, related_name="cart_items")
 
     def __str__(self):
         product_name = getattr(self.product, 'product_name', 'Unknown Product')
@@ -129,7 +154,248 @@ class CartItem(ItemCommonModel):
         verbose_name = "Cart Item"
         verbose_name_plural = "Cart Items"
         ordering = ["-date_created"]
-        indexes = [
+        indexes = CommonModel.Meta.indexes + [
             models.Index(fields=["cart", "is_deleted"]),  # Manager pattern
             models.Index(fields=["cart", "product", "is_deleted"]),  # Product's carts by status
+            models.Index(fields=["product", "is_deleted"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['cart', 'product'],
+                condition=models.Q(is_deleted=False),
+                name='unique_active_product_per_cart'
+            ),
+        ]
+
+    def clean(self):
+        """Validate cart item before saving"""
+        super().clean()
+
+        if self.cart.is_deleted:
+            raise ValidationError(_("Cannot add items to deleted cart"))
+
+        if self.cart.status != CART_STATUSES.ACTIVE:
+            raise ValidationError(_("Cannot add items to inactive cart"))
+
+
+class SavedCart(CommonModel):
+    """
+    Saved cart model for users to save their shopping carts for later.
+    Normalized design with proper relationships and constraints.
+    """
+    objects = SavedCartManager()
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name='saved_carts',
+        verbose_name=_('User'),
+        help_text=_('User who saved this cart')
+    )
+    name = models.CharField(
+        _('Cart Name'),
+        max_length=100,
+        help_text=_('Descriptive name for the saved cart')
+    )
+    description = models.TextField(
+        _('Description'),
+        blank=True,
+        null=True,
+        help_text=_('Optional description of the saved cart')
+    )
+    original_cart = models.ForeignKey(
+        "cart.Cart",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='saved_versions',
+        verbose_name=_('Original Cart'),
+        help_text=_('Original cart that was saved')
+    )
+    is_default = models.BooleanField(
+        _('Default Cart'),
+        default=False,
+        help_text=_('Whether this is the user\'s default saved cart')
+    )
+    expires_at = models.DateTimeField(
+        _('Expires At'),
+        null=True,
+        blank=True,
+        help_text=_('When this saved cart should automatically expire')
+    )
+
+    class Meta:
+        db_table = 'saved_carts'
+        verbose_name = _('Saved Cart')
+        verbose_name_plural = _('Saved Carts')
+        ordering = ['-date_created']
+
+        constraints = [
+            # Ensure only one default cart per user
+            models.UniqueConstraint(
+                fields=['user', 'is_default'],
+                condition=models.Q(is_default=True, is_deleted=False),
+                name='unique_default_cart_per_active_user'
+            ),
+            # Ensure cart names are unique per user
+            models.UniqueConstraint(
+                fields=['user', 'name'],
+                condition=models.Q(is_deleted=False),
+                name='unique_cart_name_per_active_user'
+            ),
+        ]
+        indexes = [
+            # User-specific queries
+            models.Index(fields=['user', 'is_deleted', 'is_active']),
+            models.Index(fields=['user', 'is_default']),
+            models.Index(fields=['user', 'date_created']),
+
+            # Expiration management
+            models.Index(fields=['expires_at', 'is_deleted']),
+            models.Index(fields=['is_deleted', 'expires_at']),
+
+            # Combined status and date queries
+            models.Index(fields=['is_active', 'is_deleted', 'date_created']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} - {self.name}"
+
+    def clean(self):
+        """Validate model constraints before saving."""
+        from django.core.exceptions import ValidationError
+
+        if self.is_default and SavedCart.objects.filter(
+                user=self.user,
+                is_default=True,
+                is_deleted=False
+        ).exclude(pk=self.pk).exists():
+            raise ValidationError(_('User can only have one default saved cart.'))
+
+    def save(self, *args, **kwargs):
+        """Override save to handle default cart logic."""
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    @property
+    def total_items(self):
+        """Total number of items in the saved cart."""
+        return self.items.aggregate(
+            total=models.Sum('quantity')
+        )['total'] or 0
+
+    @property
+    def total_price(self):
+        """Calculate total price of all items in the saved cart."""
+        return sum(item.total_price for item in self.items.all())
+
+    def restore_to_cart(self, user):
+        """Restore this saved cart to an active cart for the user."""
+
+        # Get or create user's active cart
+        cart, created = Cart.objects.get_or_create(
+            user=user,
+            is_active=True,
+            is_deleted=False
+        )
+
+        # Clear existing cart items
+        cart.items.all().delete()
+
+        # Copy saved cart items to active cart
+        for saved_item in self.items.all():
+            CartItem.objects.create(
+                cart=cart,
+                product=saved_item.product,
+                quantity=saved_item.quantity,
+                price=saved_item.price
+            )
+
+        return cart
+
+
+class SavedCartItem(CommonModel):
+    """
+    Individual items within a saved cart.
+    Normalized to store product snapshot and quantity.
+    """
+    saved_cart = models.ForeignKey(
+        "cart.SavedCart",
+        on_delete=models.CASCADE,
+        related_name='items',
+        verbose_name=_('Saved Cart'),
+        help_text=_('Saved cart containing this item')
+    )
+    product = models.ForeignKey(
+        "products.Product",
+        on_delete=models.PROTECT,
+        related_name='saved_cart_items',
+        verbose_name=_('Product'),
+        help_text=_('Product in the saved cart')
+    )
+    quantity = models.PositiveIntegerField(
+        _('Quantity'),
+        default=1,
+        validators=[MinValueValidator(1)],
+        help_text=_('Quantity of the product')
+    )
+    price = models.DecimalField(
+        _('Price at Save'),
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(Decimal('0.00'))],
+        help_text=_('Price of the product when cart was saved')
+    )
+    product_snapshot = models.JSONField(
+        _('Product Snapshot'),
+        default=dict,
+        help_text=_('JSON snapshot of product details at save time')
+    )
+
+    class Meta:
+        db_table = 'saved_cart_items'
+        verbose_name = _('Saved Cart Item')
+        verbose_name_plural = _('Saved Cart Items')
+        ordering = ['-date_created']
+
+        constraints = [
+            # Ensure unique products per saved cart
+            models.UniqueConstraint(
+                fields=['saved_cart', 'product'],
+                condition=models.Q(is_deleted=False),
+                name='unique_product_per_active_saved_cart'
+            ),
+        ]
+        indexes = [
+            # Cart-item relationships
+            models.Index(fields=['saved_cart', 'is_deleted']),
+            models.Index(fields=['product', 'is_deleted']),
+
+            # Price and quantity queries
+            models.Index(fields=['price']),
+            models.Index(fields=['quantity']),
+
+            # Combined cart and status queries
+            models.Index(fields=['saved_cart', 'is_active', 'is_deleted']),
+        ]
+
+    def __str__(self):
+        return f"{self.product.name} x {self.quantity} in {self.saved_cart.name}"
+
+    @property
+    def total_price(self):
+        """Calculate total price for this cart item."""
+        return self.price * self.quantity
+
+    def save(self, *args, **kwargs):
+        """Override save to capture product snapshot."""
+        if not self.product_snapshot and self.product:
+            self.product_snapshot = {
+                'name': self.product.name,
+                'sku': self.product.sku,
+                'regular_price': str(self.product.regular_price),
+                'sale_price': str(self.product.sale_price) if self.product.sale_price else None,
+                'image_url': self.product.get_primary_image_url(),
+                'category': self.product.category.name if self.product.category else None,
+            }
+        super().save(*args, **kwargs)

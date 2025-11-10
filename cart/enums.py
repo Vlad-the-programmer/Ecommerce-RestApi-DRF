@@ -4,7 +4,7 @@ from django.db import models
 
 class CART_STATUSES(models.TextChoices):
     ACTIVE = "active", _("Active")
-    FEMALE = "abandoned", _("Abandoned")
+    ABANDONED = "abandoned", _("Abandoned")
     PAID = "paid", _("Paid")
     REFUNDED = "refunded", _("Refunded")
     CANCELLED = "cancelled", _("Cancelled")

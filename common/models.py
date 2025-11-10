@@ -9,18 +9,22 @@ from django.db import models
 from django.utils import timezone
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
+from django.core.exceptions import ObjectDoesNotExist
+
 from django_countries.fields import CountryField
 from phonenumber_field.modelfields import PhoneNumberField
+from rest_framework.exceptions import ValidationError
+
 
 from cart.managers import CartItemManager
-from common.managers import SoftDeleteManger
+from common.managers import SoftDeleteManager
 
 
 logger = logging.getLogger(__name__)
 
 
 class CommonModel(models.Model):
-    objects = SoftDeleteManger()
+    objects = SoftDeleteManager()
     all_objects = models.Manager()
 
     uuid = models.UUIDField(default=uuid.uuid4, editable=False, unique=True, db_index=True)
@@ -75,8 +79,18 @@ class CommonModel(models.Model):
         """Restore soft-deleted instance"""
         self.is_deleted = False
         self.is_active = True
-        self.deleted_at = None
+        self.date_deleted = None
         self.save()
+
+        # ✅ ADD: Auto-restore related CASCADE objects
+        for rel in self._meta.related_objects:
+            if rel.on_delete == models.CASCADE:
+                related_manager = getattr(self, rel.get_accessor_name(), None)
+                if related_manager and hasattr(related_manager, 'all'):
+                    qs = related_manager.all()
+                    for obj in qs:
+                        if isinstance(obj, CommonModel):
+                            obj.restore()
 
 
 class AuthCommonModel(CommonModel):
@@ -146,10 +160,23 @@ class ItemCommonModel(CommonModel):
 
     objects = CartItemManager()
 
-    product = models.ForeignKey('products.Product', on_delete=models.SET_NULL, null=True, blank=True)
-    quantity = models.PositiveIntegerField(help_text=_("Quantity of the product"), default=1)
-    total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0.00,
-                                      help_text=_("Total price of the product"))
+    product = models.ForeignKey(
+        'products.Product',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text=_("Product for this item")
+    )
+    quantity = models.PositiveIntegerField(
+        help_text=_("Quantity of the product"),
+        default=1
+    )
+    total_price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0.00,
+        help_text=_("Total price of the product")
+    )
 
     variant = models.ForeignKey(
         'products.ProductVariant',
@@ -183,27 +210,250 @@ class ItemCommonModel(CommonModel):
         ]
 
     @property
-    def item_final_price(self) -> float:
-        """Final price for this item, taking variant into account"""
-        if self.variant:
-            return float(self.variant.final_price)
-        if self.product:
-            return self.product.get_price_for_variant(
-                color=getattr(self.variant, 'color', None),
-                size=getattr(self.variant, 'size', None)
-            )
-        return 0.0
+    def is_available(self):
+        """
+        Comprehensive availability check considering:
+        - Item's own active/deleted status
+        - Product/variant existence and status
+        - Stock availability
+        - Soft deletion of related objects
+        """
+        # Check if the item itself is active and not deleted
+        if not self.is_active or self.is_deleted:
+            return False
+
+        try:
+            if self.variant_id:
+                # Check variant availability
+                if not hasattr(self, '_variant_cache'):
+                    from products.models import ProductVariant
+                    try:
+                        self._variant_cache = ProductVariant.objects.get(
+                            pk=self.variant_id,
+                            is_deleted=False,
+                            is_active=True
+                        )
+                    except ProductVariant.DoesNotExist:
+                        return False
+
+                variant = self._variant_cache
+                return (
+                        variant.is_active and
+                        not variant.is_deleted and
+                        variant.is_in_stock and
+                        variant.quantity_available >= self.quantity
+                )
+
+            elif self.product_id:
+                # Check product availability
+                if not hasattr(self, '_product_cache'):
+                    from products.models import Product
+                    try:
+                        self._product_cache = Product.objects.get(
+                            pk=self.product_id,
+                            is_deleted=False,
+                            is_active=True
+                        )
+                    except Product.DoesNotExist:
+                        return False
+
+                product = self._product_cache
+                from products.enums import ProductStatus, StockStatus
+                return (
+                        product.is_active and
+                        not product.is_deleted and
+                        product.status == ProductStatus.PUBLISHED and
+                        product.stock_status == StockStatus.IN_STOCK and
+                        product.stock_quantity >= self.quantity
+                )
+
+            return False
+
+        except (ObjectDoesNotExist, AttributeError):
+            # Handle cases where related objects don't exist or can't be accessed
+            return False
+
+    @property
+    def availability_status(self):
+        """
+        Detailed availability status with reasons.
+        Useful for showing why an item is unavailable.
+        """
+        if not self.is_active or self.is_deleted:
+            return "item_inactive", _("This item is no longer active")
+
+        if not self.product_id and not self.variant_id:
+            return "missing_product", _("Product information is missing")
+
+        try:
+            if self.variant_id:
+                from products.models import ProductVariant
+                try:
+                    variant = ProductVariant.objects.get(pk=self.variant_id)
+                    if variant.is_deleted:
+                        return "variant_deleted", _("This variant has been removed")
+                    if not variant.is_active:
+                        return "variant_inactive", _("This variant is not active")
+                    if not variant.is_in_stock:
+                        return "out_of_stock", _("This variant is out of stock")
+                    if variant.quantity_available < self.quantity:
+                        return "insufficient_stock", _("Not enough stock available")
+                    return "available", _("Available")
+                except ProductVariant.DoesNotExist:
+                    return "variant_not_found", _("Variant not found")
+
+            elif self.product_id:
+                from products.models import Product
+                try:
+                    product = Product.objects.get(pk=self.product_id)
+                    if product.is_deleted:
+                        return "product_deleted", _("This product has been removed")
+                    if not product.is_active:
+                        return "product_inactive", _("This product is not active")
+
+                    from products.enums import ProductStatus, StockStatus
+                    if product.status != ProductStatus.PUBLISHED:
+                        return "product_unavailable", _("This product is not available")
+                    if product.stock_status != StockStatus.IN_STOCK:
+                        return "out_of_stock", _("This product is out of stock")
+                    if product.stock_quantity < self.quantity:
+                        return "insufficient_stock", _("Not enough stock available")
+                    return "available", _("Available")
+                except Product.DoesNotExist:
+                    return "product_not_found", _("Product not found")
+
+        except Exception:
+            return "error", _("Unable to check availability")
+
+        return "unknown", _("Availability unknown")
+
+    @property
+    def can_be_purchased(self):
+        """
+        Simplified check for purchase eligibility.
+        Includes business logic rules beyond basic availability.
+        """
+        if not self.is_available:
+            return False
+
+        # Additional business rules can be added here
+        # Example: Check for age restrictions, geographic restrictions, etc.
+
+        return True
+
+    @property
+    def item_final_price(self) -> Decimal:
+        """Final price for this item, taking variant into account with proper error handling"""
+        try:
+            if self.variant and hasattr(self.variant, 'final_price'):
+                return Decimal(str(self.variant.final_price))
+
+            if self.product and hasattr(self.product, 'get_price_for_variant'):
+                price = self.product.get_price_for_variant(
+                    color=getattr(self.variant, 'color', None),
+                    size=getattr(self.variant, 'size', None)
+                )
+                return Decimal(str(price)) if price else Decimal('0.0')
+
+            # Fallback to stored price or zero
+            return self.total_price / Decimal(str(self.quantity)) if self.quantity > 0 else Decimal('0.0')
+
+        except (AttributeError, ValueError, ZeroDivisionError):
+            return Decimal('0.0')
+
+    def get_availability_info(self):
+        """
+        Return comprehensive availability information.
+        Useful for API responses or detailed error messages.
+        """
+        status, message = self.availability_status
+
+        info = {
+            'is_available': self.is_available,
+            'status': status,
+            'message': message,
+            'can_purchase': self.can_be_purchased,
+            'requested_quantity': self.quantity,
+            'available_quantity': self.get_available_quantity()
+        }
+
+        # Add product/variant specific info
+        if self.variant_id and hasattr(self, '_variant_cache'):
+            info.update({
+                'variant_stock': self._variant_cache.quantity_available,
+                'variant_is_active': self._variant_cache.is_active,
+            })
+        elif self.product_id and hasattr(self, '_product_cache'):
+            info.update({
+                'product_stock': self._product_cache.stock_quantity,
+                'product_status': self._product_cache.status,
+            })
+
+        return info
+
+    def get_available_quantity(self):
+        """Get maximum quantity that can be ordered"""
+        try:
+            if self.variant_id:
+                if not hasattr(self, '_variant_cache'):
+                    from products.models import ProductVariant
+                    self._variant_cache = ProductVariant.objects.get(pk=self.variant_id)
+                return min(self.quantity, self._variant_cache.quantity_available)
+
+            elif self.product_id:
+                if not hasattr(self, '_product_cache'):
+                    from products.models import Product
+                    self._product_cache = Product.objects.get(pk=self.product_id)
+                return min(self.quantity, self._product_cache.stock_quantity)
+
+            return 0
+
+        except (ObjectDoesNotExist, AttributeError):
+            return 0
+
+    def clean(self):
+        """Validate item before saving"""
+        super().clean()
+
+        # Ensure at least one of product or variant is set
+        if not self.product_id and not self.variant_id:
+            raise ValidationError(_("Either product or variant must be set."))
+
+        # Validate quantity is positive
+        if self.quantity < 1:
+            raise ValidationError(_("Quantity must be at least 1."))
+
+        # Check availability if item is active
+        if self.is_active and not self.is_deleted:
+            if not self.is_available:
+                raise ValidationError(
+                    _("Cannot add unavailable item. %(reason)s") %
+                    {'reason': self.availability_status[1]}
+                )
 
     def save(self, *args, **kwargs):
-        """Automatically calculate total price before saving"""
-        price = Decimal(str(self.item_final_price or 0))
-        quantity = Decimal(str(self.quantity or 0))
+        """Automatically calculate total price before saving with validation"""
+        # Calculate price
+        price = self.item_final_price
+        quantity = Decimal(str(self.quantity))
         self.total_price = price * quantity
+
+        # Run validation
+        self.clean()
+
         super().save(*args, **kwargs)
+
+
+from django.utils.text import slugify
+from django.db import models
+from typing import Optional
+import uuid
 
 
 class SlugFieldCommonModel(CommonModel):
     """Common model for models with slug field"""
+    slug_fields = []  # List of fields to use for slug generation (must set in child model)
+
     slug = models.SlugField(
         unique=True,
         max_length=255,
@@ -224,14 +474,50 @@ class SlugFieldCommonModel(CommonModel):
             queryset = queryset.exclude(pk=self.pk)
         return not queryset.exists()
 
+    def _get_field_value_without_joins(self, field: str):
+        """
+        Get field value without creating join queries.
+        Handles direct fields and simple foreign key relationships.
+        """
+        # Handle direct fields
+        if '__' not in field:
+            return getattr(self, field, None)
+
+        # Handle foreign key relationships without joins
+        parts = field.split('__')
+        current_obj = self
+
+        for part in parts:
+            if not current_obj:
+                return None
+
+            # Get the related object ID first
+            field_obj = current_obj._meta.get_field(part)
+            if isinstance(field_obj, models.ForeignKey):
+                # Get the foreign key ID
+                fk_id = getattr(current_obj, field_obj.attname)  # This gets the ID without join
+                if not fk_id:
+                    return None
+
+                # Get the related object from database if needed
+                try:
+                    current_obj = field_obj.related_model.objects.get(pk=fk_id)
+                except field_obj.related_model.DoesNotExist:
+                    return None
+            else:
+                # For non-foreign key fields in the chain
+                current_obj = getattr(current_obj, part, None)
+
+        return str(current_obj) if current_obj else None
+
     def generate_unique_slug(self, fields_to_slugify: list[str]) -> Optional[str]:
         field_values = []
         for field in fields_to_slugify:
-            value = getattr(self, field, None)
-            if callable(value):
-                value = value()
+            # Use the safe method that avoids joins
+            value = self._get_field_value_without_joins(field)
             if value:
                 field_values.append(str(value))
+
         if not field_values:
             return None
 
@@ -263,7 +549,7 @@ class SlugFieldCommonModel(CommonModel):
         super().save(*args, **kwargs)
         if is_new or not self.slug:
             # Customize fields used to generate slug per model
-            fields_to_slugify = getattr(self, "slug_fields", ["slug"])  # default fallback
+            fields_to_slugify = getattr(self, "slug_fields", ["slug"])
             self._generate_and_set_slug(fields_to_slugify)
 
 

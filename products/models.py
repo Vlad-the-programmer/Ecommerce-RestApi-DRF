@@ -111,6 +111,47 @@ class ProductVariant(CommonModel):
             base += f" ({', '.join(attributes)})"
         return base
 
+    class Meta:
+        db_table = "product_variants"
+        verbose_name = _("Product Variant")
+        verbose_name_plural = _("Product Variants")
+        ordering = ["product", "color", "size"]
+        unique_together = ['product', 'color', 'size', 'material', 'style']
+        indexes = CommonModel.Meta.indexes + [
+            # Core variant indexes
+            models.Index(fields=['product', 'is_deleted', 'is_active']),
+            models.Index(fields=['sku', 'is_deleted']),
+
+            # Attribute-based filtering
+            models.Index(fields=['color', 'is_deleted']),
+            models.Index(fields=['size', 'is_deleted']),
+            models.Index(fields=['material', 'is_deleted']),
+            models.Index(fields=['style', 'is_deleted']),
+
+            # Inventory management
+            models.Index(fields=['stock_quantity', 'is_deleted']),
+            models.Index(fields=['product', 'stock_quantity', 'is_deleted']),
+            models.Index(fields=['is_deleted', 'stock_quantity', 'is_active']),
+
+            # Price and cost queries
+            models.Index(fields=['price_adjustment', 'is_deleted']),
+            models.Index(fields=['cost_price', 'is_deleted']),
+
+            # Composite indexes for common queries
+            models.Index(fields=['product', 'color', 'size', 'is_deleted']),
+            models.Index(fields=['is_deleted', 'is_active', 'stock_quantity']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(stock_quantity__gte=0),
+                name="non_negative_stock_quantity"
+            ),
+            models.CheckConstraint(
+                check=models.Q(low_stock_threshold__gte=0),
+                name="non_negative_low_stock_threshold"
+            ),
+        ]
+
     @property
     def final_price(self):
         """Calculate final price including base price and adjustment"""
@@ -196,51 +237,10 @@ class ProductVariant(CommonModel):
         if self.stock_quantity < 0:
             raise ValidationError(_("Stock quantity cannot be negative"))
 
-    class Meta:
-        db_table = "product_variants"
-        verbose_name = _("Product Variant")
-        verbose_name_plural = _("Product Variants")
-        ordering = ["product", "color", "size"]
-        unique_together = ['product', 'color', 'size', 'material', 'style']
-        indexes = CommonModel.Meta.indexes + [
-            # Core variant indexes
-            models.Index(fields=['product', 'is_deleted', 'is_active']),
-            models.Index(fields=['sku', 'is_deleted']),
-
-            # Attribute-based filtering
-            models.Index(fields=['color', 'is_deleted']),
-            models.Index(fields=['size', 'is_deleted']),
-            models.Index(fields=['material', 'is_deleted']),
-            models.Index(fields=['style', 'is_deleted']),
-
-            # Inventory management
-            models.Index(fields=['stock_quantity', 'is_deleted']),
-            models.Index(fields=['product', 'stock_quantity', 'is_deleted']),
-            models.Index(fields=['is_deleted', 'stock_quantity', 'is_active']),
-
-            # Price and cost queries
-            models.Index(fields=['price_adjustment', 'is_deleted']),
-            models.Index(fields=['cost_price', 'is_deleted']),
-
-            # Composite indexes for common queries
-            models.Index(fields=['product', 'color', 'size', 'is_deleted']),
-            models.Index(fields=['is_deleted', 'is_active', 'stock_quantity']),
-        ]
-        constraints = [
-            models.CheckConstraint(
-                check=models.Q(stock_quantity__gte=0),
-                name="non_negative_stock_quantity"
-            ),
-            models.CheckConstraint(
-                check=models.Q(low_stock_threshold__gte=0),
-                name="non_negative_low_stock_threshold"
-            ),
-        ]
-
 
 class ProductImage(CommonModel):
     product = models.ForeignKey(
-        "Product",
+        "products.Product",
         on_delete=models.CASCADE,
         related_name='product_images'
     )
@@ -261,6 +261,16 @@ class ProductImage(CommonModel):
         help_text=_("Order in which images are displayed (lower numbers first)")
     )
 
+    class Meta:
+        db_table = "product_images"
+        verbose_name = _("Product Image")
+        verbose_name_plural = _("Product Images")
+        ordering = ["display_order", "-date_created"]
+        indexes = CommonModel.Meta.indexes + [
+            models.Index(fields=['product', 'is_deleted']),
+            models.Index(fields=['product', 'display_order', 'is_deleted']),
+        ]
+
     def img_preview(self):
         return mark_safe(f'<img src="{self.imageURL}" width="300" height="300" style="object-fit: cover;"/>')
 
@@ -271,16 +281,6 @@ class ProductImage(CommonModel):
         except:
             url = ''
         return url
-
-    class Meta:
-        db_table = "product_images"
-        verbose_name = _("Product Image")
-        verbose_name_plural = _("Product Images")
-        ordering = ["display_order", "-date_created"]
-        indexes = CommonModel.Meta.indexes + [
-            models.Index(fields=['product', 'is_deleted']),
-            models.Index(fields=['product', 'display_order', 'is_deleted']),
-        ]
 
 
 class Product(SlugFieldCommonModel):
@@ -308,7 +308,7 @@ class Product(SlugFieldCommonModel):
 
     category = models.ForeignKey(
         "category.Category",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="products",
         verbose_name=_("Category")
     )
@@ -468,13 +468,60 @@ class Product(SlugFieldCommonModel):
     duration = models.DurationField(null=True, blank=True)
     location_required = models.BooleanField(default=False)
     location = models.ForeignKey(
-        "Location", on_delete=models.SET_NULL, null=True, blank=True,
+        "Location",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name='service_products'
     )
     service_type = models.CharField(
         max_length=50, choices=ServiceType.choices, default=ServiceType.CONSULTATION
     )
     provider_notes = models.TextField(blank=True)
+
+    class Meta:
+        db_table = 'products'
+        verbose_name = 'Product'
+        verbose_name_plural = 'Products'
+        indexes = [
+            # Core indexes
+            models.Index(fields=['product_name']),
+            models.Index(fields=['category', 'status']),
+            models.Index(fields=['product_type', 'status']),
+            models.Index(fields=['status', 'stock_status']),
+            models.Index(fields=['sku']),
+            models.Index(fields=['barcode']),
+
+            # Manufacturing indexes
+            models.Index(fields=['manufacturing_location']),
+            models.Index(fields=['batch_number']),
+            models.Index(fields=['manufacturing_date']),
+            models.Index(fields=['manufacturing_cost']),
+
+            # Composite manufacturing indexes
+            models.Index(fields=['manufacturing_date', 'manufacturing_location']),
+            models.Index(fields=['product_type', 'manufacturing_location']),
+        ]
+        constraints = [
+            models.CheckConstraint(check=models.Q(price__gte=0), name="non_negative_price"),
+            models.CheckConstraint(
+                check=(
+                        models.Q(compare_at_price__isnull=True) |
+                        models.Q(compare_at_price__gte=models.F('price'))
+                ),
+                name="compare_at_price_gte_price"
+            ),
+            # Manufacturing constraints
+            models.CheckConstraint(check=models.Q(manufacturing_cost__gte=0), name="non_negative_mfg_cost"),
+            models.CheckConstraint(check=models.Q(packaging_cost__gte=0), name="non_negative_packaging_cost"),
+            models.CheckConstraint(check=models.Q(shipping_to_warehouse_cost__gte=0), name="non_negative_ship_cost"),
+            models.CheckConstraint(
+                check=models.Q(shelf_life__gt=timedelta(seconds=0)) | models.Q(shelf_life__isnull=True),
+                name="positive_shelf_life"
+            ),
+        ]
+        ordering = ['product_name']
+
 
     def save(self, *args, **kwargs):
         # Auto-update stock_status based on variants
@@ -673,46 +720,3 @@ class Product(SlugFieldCommonModel):
             value = getattr(self, field)
             if value is not None and value < 0:
                 raise ValidationError({field: _(f"{field.replace('_', ' ').title()} cannot be negative")})
-
-    class Meta:
-        db_table = 'products'
-        verbose_name = 'Product'
-        verbose_name_plural = 'Products'
-        indexes = [
-            # Core indexes
-            models.Index(fields=['product_name']),
-            models.Index(fields=['category', 'status']),
-            models.Index(fields=['product_type', 'status']),
-            models.Index(fields=['status', 'stock_status']),
-            models.Index(fields=['sku']),
-            models.Index(fields=['barcode']),
-
-            # Manufacturing indexes
-            models.Index(fields=['manufacturing_location']),
-            models.Index(fields=['batch_number']),
-            models.Index(fields=['manufacturing_date']),
-            models.Index(fields=['manufacturing_cost']),
-
-            # Composite manufacturing indexes
-            models.Index(fields=['manufacturing_date', 'manufacturing_location']),
-            models.Index(fields=['product_type', 'manufacturing_location']),
-        ]
-        constraints = [
-            models.CheckConstraint(check=models.Q(price__gte=0), name="non_negative_price"),
-            models.CheckConstraint(
-                check=(
-                        models.Q(compare_at_price__isnull=True) |
-                        models.Q(compare_at_price__gte=models.F('price'))
-                ),
-                name="compare_at_price_gte_price"
-            ),
-            # Manufacturing constraints
-            models.CheckConstraint(check=models.Q(manufacturing_cost__gte=0), name="non_negative_mfg_cost"),
-            models.CheckConstraint(check=models.Q(packaging_cost__gte=0), name="non_negative_packaging_cost"),
-            models.CheckConstraint(check=models.Q(shipping_to_warehouse_cost__gte=0), name="non_negative_ship_cost"),
-            models.CheckConstraint(
-                check=models.Q(shelf_life__gt=timedelta(seconds=0)) | models.Q(shelf_life__isnull=True),
-                name="positive_shelf_life"
-            ),
-        ]
-        ordering = ['product_name']

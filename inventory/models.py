@@ -1,22 +1,23 @@
-from datetime import timezone
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+from django.utils import timezone
 
 from common.models import CommonModel, AddressBaseModel
 from inventory.enums import WAREHOUSE_TYPE
+from inventory.managers import InventoryManager, WarehouseManager
 
 
 class WarehouseProfile(AddressBaseModel):
     """Warehouse model for storing warehouse information"""
 
-    name = models.CharField(max_length=255, db_index=True)
-    code = models.CharField(max_length=50, unique=True, db_index=True)
-    contact_phone = models.CharField(max_length=20, blank=True, null=True)
-    contact_email = models.EmailField(blank=True, null=True)
-    is_operational = models.BooleanField(default=True, db_index=True)
+    name = models.CharField(max_length=255, db_index=True, help_text=_("Warehouse name"))
+    code = models.CharField(max_length=50, unique=True, db_index=True, help_text=_("Warehouse code"))
+    contact_phone = models.CharField(max_length=20, blank=True, null=True, help_text=_("Conatct phone of a warehouse"))
+    contact_email = models.EmailField(blank=True, null=True, help_text=_("Conatct email of a warehouse"))
+    is_operational = models.BooleanField(default=True, db_index=True, help_text=_("Is warehouse operational"))
     capacity = models.PositiveIntegerField(help_text=_("Total storage capacity in units"))
 
     # Additional useful fields for warehouse management
@@ -172,12 +173,14 @@ class WarehouseProfile(AddressBaseModel):
                 name='manager_requires_operational'
             ),
             models.CheckConstraint(
-                check=~models.Q(warehouse_type='main') | models.Q(is_operational=True),
+                check=~models.Q(warehouse_type=WAREHOUSE_TYPE.MAIN) | models.Q(is_operational=True),
                 name='main_warehouse_must_be_operational',
-                condition=models.Q(warehouse_type='main')
+                condition=models.Q(warehouse_type=WAREHOUSE_TYPE.MAIN)
             ),
         ]
         ordering = ['country', 'state', 'city', 'name']
+
+    objects = WarehouseManager()
 
     def clean(self):
         """Additional validation"""
@@ -234,17 +237,21 @@ class Inventory(CommonModel):
     )
     warehouse = models.ForeignKey(
         "WarehouseProfile",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='inventory_items'
     )
-    quantity_available = models.PositiveIntegerField(default=0, db_index=True)
-    quantity_reserved = models.PositiveIntegerField(default=0, db_index=True)
-    reorder_level = models.PositiveIntegerField(default=10)
+    quantity_available = models.PositiveIntegerField(default=0, db_index=True,
+                                                     help_text=_("Available quantity in units"))
+    quantity_reserved = models.PositiveIntegerField(default=0, db_index=True,
+                                                    help_text=_("Reserved quantity in units"))
+    reorder_level = models.PositiveIntegerField(default=10, help_text=_("Reorder level in units"))
 
     # Additional useful fields
-    last_restocked = models.DateTimeField(null=True, blank=True, db_index=True)
-    last_checked = models.DateTimeField(auto_now=True)
-    is_backorder_allowed = models.BooleanField(default=False, db_index=True)
+    last_restocked = models.DateTimeField(null=True, blank=True, db_index=True,
+                                           help_text=_("Last restocked date and time"))
+    last_checked = models.DateTimeField(auto_now=True, help_text=_("Last checked date and time"))
+    is_backorder_allowed = models.BooleanField(default=False, db_index=True,
+                                               help_text=_("Allow backorders for this inventory"))
 
     # Add for better inventory management
     cost_price = models.DecimalField(
@@ -252,11 +259,13 @@ class Inventory(CommonModel):
         null=True, blank=True, db_index=True,
         help_text=_("Cost price at this warehouse (can vary by location)")
     )
-    batch_number = models.CharField(max_length=100, blank=True, null=True, db_index=True)
-    expiry_date = models.DateField(null=True, blank=True, db_index=True)
+    batch_number = models.CharField(max_length=100, blank=True, null=True, db_index=True,
+                                    help_text=_("Batch number of this inventory"))
+    expiry_date = models.DateField(null=True, blank=True, db_index=True, help_text=_("Expiry date of this inventory"))
 
     # Add for inventory valuation
-    last_cost_update = models.DateTimeField(null=True, blank=True)
+    last_cost_update = models.DateTimeField(null=True, blank=True, db_index=True,
+                                            help_text=_("Last cost update date and time"))
 
     # Additional manufacturing fields for SPECIFIC inventory batches
     manufacturing_cost_adjustment = models.DecimalField(
@@ -334,7 +343,6 @@ class Inventory(CommonModel):
             models.Index(fields=['last_checked', 'is_active']),
             models.Index(fields=['warehouse', 'last_checked', 'is_active']),        ]
         constraints = [
-            # ... (keep all your existing constraints) ...
             models.CheckConstraint(
                 check=models.Q(manufacturing_cost_adjustment__isnull=True) | models.Q(
                     manufacturing_cost_adjustment__gte=0),
@@ -350,6 +358,8 @@ class Inventory(CommonModel):
             ),
         ]
         ordering = ['warehouse', 'product_variant']
+
+    objects = InventoryManager()
 
     @property
     def total_landed_cost(self):
@@ -408,6 +418,12 @@ class Inventory(CommonModel):
     def clean(self):
         """Additional validation"""
         super().clean()
+
+        if self.warehouse.is_deleted:
+            raise ValidationError(_("Cannot assign inventory to deleted warehouse"))
+
+        if self.product_variant.is_deleted:
+            raise ValidationError(_("Cannot assign inventory to deleted product variant"))
 
         # Validate expiry date is not in the past for items with stock
         if self.expiry_date and self.expiry_date < timezone.now().date() and self.quantity_available > 0:

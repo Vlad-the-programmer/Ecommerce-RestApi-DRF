@@ -5,6 +5,7 @@ from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
 from common.models import CommonModel, ItemCommonModel
+from wishlist.managers import WishListManager, WishListItemManager
 
 
 class WishListItemPriority(models.IntegerChoices):
@@ -17,9 +18,13 @@ class Wishlist(CommonModel):
     """
     Represents a user's wishlist containing multiple products.
     """
+    objects = WishListManager()
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="wishlist",
         verbose_name=_("User"),
         help_text=_("User who owns this wishlist."),
@@ -39,7 +44,7 @@ class Wishlist(CommonModel):
     )
 
     class Meta:
-        db_table = "wishlist"
+        db_table = "wishlists"
         verbose_name = _("Wishlist")
         verbose_name_plural = _("Wishlists")
         constraints = [
@@ -47,10 +52,16 @@ class Wishlist(CommonModel):
                 check=Q(is_deleted=False),
                 name="wishlist_not_deleted_check"
             ),
+            models.UniqueConstraint(
+                fields=['user'],
+                condition=Q(is_deleted=False),
+                name='unique_active_wishlist_per_user'
+            ),
         ]
         indexes = [
             models.Index(fields=["user"], name="wishlist_user_idx"),
             models.Index(fields=["is_public", "is_deleted"], name="wishlist_public_status_idx"),
+            models.Index(fields=["user", "is_public", "is_deleted"], name="wishlist_user_is_public_idx"),
         ]
 
     def __str__(self):
@@ -63,23 +74,107 @@ class Wishlist(CommonModel):
 
     def clean(self):
         super().clean()
-        # Ensure user doesn't have multiple wishlists
-        if not self.pk and Wishlist.objects.filter(user=self.user, is_deleted=False).exists():
+        # Ensure user doesn't have multiple active wishlists
+        if not self.pk and Wishlist.objects.filter(
+                user=self.user,
+                is_deleted=False
+        ).exists():
             raise ValidationError(
                 {"user": _("User can only have one active wishlist.")}
             )
+
+    def add_item(self, product, variant=None, quantity=1, note="", priority=WishListItemPriority.MEDIUM):
+        """Add item to wishlist with validation."""
+        # Check if item already exists
+        existing_item = WishListItem.objects.filter(
+            wishlist=self,
+            product=product,
+            variant=variant,
+        ).first()
+
+        if existing_item:
+            # Update existing item
+            existing_item.quantity = quantity
+            existing_item.note = note
+            existing_item.priority = priority
+            existing_item.save()
+            return existing_item, False
+        else:
+            # Create new item
+            item = WishListItem.objects.create(
+                wishlist=self,
+                product=product,
+                variant=variant,
+                quantity=quantity,
+                note=note,
+                priority=priority,
+                user=self.user  # Auto-set user
+            )
+            return item, True
+
+    def remove_item(self, product, variant=None):
+        """Remove item from wishlist using soft delete."""
+        try:
+            item = self.wishlist_items.get(
+                product=product,
+                variant=variant,
+                is_deleted=False
+            )
+            item.delete()  # Soft delete
+            return True
+        except WishListItem.DoesNotExist:
+            return False
+
+    def clear(self):
+        """Remove all items from wishlist."""
+        self.wishlist_items.all().delete()
+
+    def get_available_items(self):
+        """Get all available items in wishlist."""
+        return self.wishlist_items.filter(
+            is_deleted=False
+        )
+
+    def get_items_by_priority(self):
+        """Get items ordered by priority."""
+        return self.wishlist_items.filter(
+            is_deleted=False
+        ).by_priority()
+
+    def move_all_to_cart(self, cart):
+        """Move all wishlist items to cart."""
+        items = self.wishlist_items.filter(is_deleted=False)
+        cart_items = []
+
+        for item in items:
+            cart_item = item.move_to_cart(cart)
+            cart_items.append(cart_item)
+
+        return cart_items
 
 
 class WishListItem(ItemCommonModel):
     """
     Stores items users have added to their wishlist.
     """
+    objects = WishListItemManager()
+
     wishlist = models.ForeignKey(
         "wishlist.Wishlist",
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name="wishlist_items",
         verbose_name=_("Wishlist"),
         help_text=_("Wishlist to which this item belongs."),
+    )
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="wishlist_items"
     )
 
     note = models.TextField(
@@ -111,10 +206,6 @@ class WishListItem(ItemCommonModel):
                 check=Q(quantity__gte=1),
                 name="wishlist_item_quantity_min_1"
             ),
-            models.CheckConstraint(
-                check=Q(is_deleted=False),
-                name="wishlist_item_not_deleted_check"
-            ),
         ]
         indexes = [
             # Foreign key lookups
@@ -131,14 +222,24 @@ class WishListItem(ItemCommonModel):
         variant_info = f" ({self.variant})" if self.variant else ""
         return f"Wishlist Item: {self.wishlist.user} - {self.product}{variant_info}"
 
+    def save(self, *args, **kwargs):
+        """Auto-set user from wishlist for soft delete consistency"""
+        if self.wishlist and not self.user:
+            self.user = self.wishlist.user
+        super().save(*args, **kwargs)
+
     def clean(self):
         """
         Ensure logical consistency before saving.
         """
         super().clean()
 
-        # Ensure wishlist belongs to the user
-        if self.wishlist.user != self.user:
+        # Auto-set user from wishlist if not set
+        if self.wishlist and not self.user:
+            self.user = self.wishlist.user
+
+        # Ensure wishlist belongs to the user (if both are set)
+        if self.wishlist and self.user and self.wishlist.user != self.user:
             raise ValidationError(
                 {"wishlist": _("Wishlist must belong to the user.")}
             )
@@ -154,3 +255,34 @@ class WishListItem(ItemCommonModel):
             raise ValidationError(
                 {"variant": _("Cannot add inactive or deleted variant to wishlist.")}
             )
+
+        # Validate priority range
+        if self.priority < 1 or self.priority > 5:  # Assuming 1-5 scale
+            raise ValidationError(
+                {"priority": _("Priority must be between 1 and 5.")}
+            )
+
+    def move_to_cart(self, cart):
+        """Move this wishlist item to shopping cart."""
+        from cart.models import CartItem
+
+        cart_item, created = CartItem.objects.get_or_create(
+            cart=cart,
+            product=self.product,
+            variant=self.variant,
+            defaults={
+                'quantity': self.quantity,
+                'user': self.user
+            }
+        )
+
+        if not created:
+            cart_item.quantity += self.quantity
+            cart_item.save()
+
+        # Remove from wishlist after moving to cart
+        self.delete()
+
+        return cart_item
+
+

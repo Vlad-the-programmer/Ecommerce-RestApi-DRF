@@ -1,6 +1,8 @@
 from django.db import models
 from django.utils.translation import gettext_lazy as _
+from rest_framework.exceptions import ValidationError
 
+from category.managers import CategoryManager
 from common.models import SlugFieldCommonModel
 
 
@@ -9,6 +11,8 @@ class Category(SlugFieldCommonModel):
     Category model with parent-child hierarchy.
     Supports main categories and nested subcategories.
     """
+    slug_fields = ["parent__name", "name"]
+    objects = CategoryManager()
 
     name = models.CharField(
         max_length=100,
@@ -25,7 +29,7 @@ class Category(SlugFieldCommonModel):
     )
     parent = models.ForeignKey(
         "self",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         null=True,
         blank=True,
         related_name="children",
@@ -50,7 +54,8 @@ class Category(SlugFieldCommonModel):
         constraints = [
             models.UniqueConstraint(
                 fields=['parent', 'name'],
-                name='unique_category_name'
+                name='unique_category_name',
+                condition=models.Q(is_deleted=False)  # Only enforce for active categories
             ),
             models.CheckConstraint(
                 check=~models.Q(pk=models.F('parent_id')),
@@ -76,5 +81,24 @@ class Category(SlugFieldCommonModel):
             parent = parent.parent
         return "-".join(parts)
 
-    slug_fields = ["parent__name", "name"]
+    def clean(self):
+        """Validate category before saving"""
+        super().clean()
 
+        # Prevent setting deleted category as parent
+        if self.parent and self.parent.is_deleted:
+            raise ValidationError(_("Cannot set deleted category as parent"))
+
+        # Prevent circular references
+        if self.parent and self.parent == self:
+            raise ValidationError(_("Category cannot be its own parent"))
+
+    @property
+    def is_root(self):
+        """Check if this is a root category"""
+        return self.parent is None
+
+    @property
+    def is_subcategory(self):
+        """Check if this is a subcategory"""
+        return self.parent is not None

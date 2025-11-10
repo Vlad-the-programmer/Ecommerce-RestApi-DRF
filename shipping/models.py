@@ -80,7 +80,7 @@ class ShippingClass(CommonModel):
         help_text=_("Shipping carrier or service provider")
     )
 
-    estimated_days_min = models.IntegerField(
+    estimated_days_min = models.PositiveIntegerField(
         verbose_name=_("Minimum Estimated Days"),
         help_text=_("Minimum number of business days for delivery"),
         validators=[MinValueValidator(0), MaxValueValidator(365)]
@@ -177,10 +177,6 @@ class ShippingClass(CommonModel):
         validators=[MinValueValidator(0), MaxValueValidator(14)]
     )
 
-    order = models.OneToOneField("orders.Order", on_delete=models.CASCADE, related_name="shipping_class")
-    shipping_address = models.ForeignKey("common.ShippingAddress", on_delete=models.CASCADE,
-                                         related_name="shipping_classes")
-
     def __str__(self):
         return f"{self.name} ({self.get_shipping_type_display()})"
 
@@ -205,9 +201,23 @@ class ShippingClass(CommonModel):
             'max': total_max
         }
 
-    def calculate_order_weight(self) -> float:
-        """Calculate total order weight in kilograms"""
-        return float(self.order.order_items.aggregate(total=models.Sum('weight'))['total']) or float(0)
+    def calculate_order_weight(self, order) -> float:
+        """
+        Calculate total order weight in kilograms for a SPECIFIC order.
+
+        Args:
+            order: The Order instance to calculate weight for
+
+        Returns:
+            Total weight in kilograms
+        """
+        total_weight = 0.0
+        for item in order.order_items.all():
+            if item.variant and item.variant.weight:
+                total_weight += float(item.variant.weight) * item.quantity
+            elif item.product and item.product.weight:
+                total_weight += float(item.product.weight) * item.quantity
+        return total_weight
 
     def calculate_shipping_cost(self, order_total: float = 0,
                                 destination_country_code: str = None) -> float:
@@ -386,9 +396,6 @@ class ShippingClass(CommonModel):
         verbose_name_plural = _("Shipping Classes")
         ordering = ["base_cost", "estimated_days_min"]
         indexes = CommonModel.Meta.indexes + [
-            models.Index(fields=['order', 'is_deleted', 'is_active']),
-            models.Index(fields=['shipping_address', 'is_deleted', 'is_active']),
-
             # Core shipping class indexes
             models.Index(fields=['shipping_type', 'is_deleted', 'is_active']),
             models.Index(fields=['carrier_type', 'is_deleted', 'is_active']),

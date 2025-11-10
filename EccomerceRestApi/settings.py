@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     'invoices.apps.InvoicesConfig',
     'payments.apps.PaymentsConfig',
     'inventory.apps.InventoryConfig',
+    'refunds.apps.RefundsConfig',
 ]
 
 

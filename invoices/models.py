@@ -1,6 +1,4 @@
 from django.core.exceptions import ValidationError
-from django.db import models
-
 
 from django.conf import settings
 from django.core.validators import MinValueValidator
@@ -9,14 +7,8 @@ from django.db.models import Q, F
 from django.utils.translation import gettext_lazy as _
 
 from common.models import CommonModel
-
-
-class InvoiceStatus(models.TextChoices):
-    DRAFT = "DRAFT", _("Draft")
-    ISSUED = "ISSUED", _("Issued")
-    PAID = "PAID", _("Paid")
-    CANCELLED = "CANCELLED", _("Cancelled")
-    OVERDUE = "OVERDUE", _("Overdue")
+from invoices.enums import InvoiceStatus
+from invoices.managers import InvoiceManager
 
 
 class Invoice(CommonModel):
@@ -25,10 +17,11 @@ class Invoice(CommonModel):
     Inherits audit fields, soft deletion, and indexing from CommonModel.
     """
 
+    objects = InvoiceManager()
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="invoices",
         verbose_name=_("User"),
         help_text=_("User or customer associated with this invoice."),
@@ -88,31 +81,30 @@ class Invoice(CommonModel):
         ordering = ["-date_created"]
 
         constraints = [
-            # 1️⃣ Unique invoice number constraint
+            # Unique invoice number constraint
             models.UniqueConstraint(
                 fields=["invoice_number"],
                 name="unique_invoice_number"
             ),
 
-            # 2️⃣ Logical date check: due_date >= issue_date
+            # Logical date check: due_date >= issue_date
             models.CheckConstraint(
                 check=Q(due_date__gte=F("issue_date")),
                 name="invoice_due_date_after_issue_date"
             ),
 
-            # 3️⃣ Non-negative total amount
+            # Non-negative total amount
             models.CheckConstraint(
                 check=Q(total_amount__gte=0),
                 name="invoice_non_negative_total"
             ),
 
-            # 4️⃣ Active invoices must not be deleted
+            # Active invoices must not be deleted
             models.CheckConstraint(
-                check=Q(is_deleted=False) | Q(status__in=["CANCELLED"]),
+                check=Q(is_deleted=False) | Q(status__in=[InvoiceStatus.CANCELLED]),
                 name="invoice_deleted_only_if_cancelled"
             ),
         ]
-
         indexes = CommonModel.Meta.indexes + [
             # Core lookups
             models.Index(fields=["user"], name="invoice_user_idx"),
@@ -132,6 +124,12 @@ class Invoice(CommonModel):
 
     def __str__(self):
         return f"Invoice #{self.invoice_number} - {self.user} ({self.status})"
+
+    def delete(self, *args, **kwargs):
+        if self.is_paid:
+            raise ValidationError("Cannot delete invoice with completed payments")
+
+        super().delete(*args, **kwargs)
 
     @property
     def is_overdue(self):
@@ -170,6 +168,9 @@ class Invoice(CommonModel):
     def clean(self):
         """Custom validation for business logic."""
         super().clean()
+
+        if self.user.is_deleted:
+            raise ValidationError(_("Cannot create invoice for deleted user"))
 
         # Prevent negative amounts
         if self.total_amount < 0:
