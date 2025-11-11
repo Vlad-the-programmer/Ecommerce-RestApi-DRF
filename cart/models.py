@@ -2,6 +2,7 @@ from datetime import datetime
 
 from django.conf import settings
 from django.db import models
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator
 from decimal import Decimal
@@ -19,29 +20,67 @@ class Coupon(CommonModel):
     """
     objects = CouponManager()
 
-    coupon_code = models.CharField(max_length=10)
-    is_expired = models.BooleanField(default=False)
-    discount_amount = models.PositiveIntegerField(default=100, help_text=_("Discount in %(s)"))
-    minimum_amount = models.PositiveIntegerField(default=500, help_text=_("Minimum amount required to use this coupon"))
-    expiration_date = models.DateTimeField()
-    usage_limit = models.PositiveIntegerField(default=1, help_text=_("Number of times this coupon can be used"))
-    used_count = models.PositiveIntegerField(default=0, help_text=_("Number of times this coupon has been used"))
-
-    def __str__(self):
-        return f"{self.coupon_code} - {self.discount_amount}% - {self.expiration_date} - Expired: {self.is_expired}"
+    product = models.ForeignKey(
+        "products.Product",
+        on_delete=models.PROTECT,
+        related_name="coupons",
+        db_index=True,
+        verbose_name=_("Product"),
+        help_text=_("Product this coupon applies to")
+    )
+    coupon_code = models.CharField(
+        max_length=10,
+        db_index=True,
+        verbose_name=_("Coupon Code")
+    )
+    is_expired = models.BooleanField(
+        default=False,
+        db_index=True,
+        verbose_name=_("Is Expired")
+    )
+    discount_amount = models.PositiveIntegerField(
+        default=100,
+        verbose_name=_("Discount Amount (%)"),
+        help_text=_("Discount percentage")
+    )
+    minimum_amount = models.PositiveIntegerField(
+        default=500,
+        verbose_name=_("Minimum Amount"),
+        help_text=_("Minimum cart amount required to use this coupon")
+    )
+    expiration_date = models.DateTimeField(
+        db_index=True,
+        verbose_name=_("Expiration Date")
+    )
+    usage_limit = models.PositiveIntegerField(
+        default=1,
+        verbose_name=_("Usage Limit"),
+        help_text=_("Maximum number of times this coupon can be used")
+    )
+    used_count = models.PositiveIntegerField(
+        default=0,
+        verbose_name=_("Used Count"),
+        help_text=_("Number of times this coupon has been used")
+    )
 
     class Meta:
         db_table = "coupons"
-        verbose_name = "Coupon"
-        verbose_name_plural = "Coupons"
+        verbose_name = _("Coupon")
+        verbose_name_plural = _("Coupons")
         ordering = ["-expiration_date"]
         indexes = CommonModel.Meta.indexes + [
             # Core manager index pattern
-            models.Index(fields=["is_deleted", "is_expired"]),  # For CouponManager
+            models.Index(fields=["is_deleted", "is_expired"]),
 
             # Common lookup patterns
-            models.Index(fields=["coupon_code", "is_deleted", "is_expired"]),  # Code validation
-            models.Index(fields=["expiration_date", "is_deleted", "is_expired"]),  # Cleanup queries
+            models.Index(fields=["coupon_code", "is_deleted", "is_expired"]),
+            models.Index(fields=["expiration_date", "is_deleted", "is_expired"]),
+            models.Index(fields=["product", "is_deleted", "is_expired"]),
+            models.Index(fields=["minimum_amount", "is_deleted"]),
+
+            # For reporting and analytics
+            models.Index(fields=["used_count", "usage_limit"]),
+            models.Index(fields=["date_created", "is_deleted"]),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -53,25 +92,68 @@ class Coupon(CommonModel):
                 check=models.Q(usage_limit__gte=1),
                 name='usage_limit_check'
             ),
+            models.CheckConstraint(
+                check=models.Q(discount_amount__gt=0, discount_amount__lte=100),
+                name='valid_discount_range'
+            ),
+            models.CheckConstraint(
+                check=(
+                        models.Q(expiration_date__gt=models.F('date_created')) |
+                        models.Q(expiration_date__isnull=True)
+                ),
+                name='valid_expiration_date'
+            ),
         ]
 
-    def is_valid(self, cart_total: float = None):
+    def __str__(self):
+        return f"{self.coupon_code} - {self.discount_amount}% - {self.expiration_date}"
+
+    def clean(self):
+        """Additional validation"""
+        super().clean()
+        if self.expiration_date and self.expiration_date <= timezone.now():
+            raise ValidationError({
+                'expiration_date': _("Expiration date must be in the future")
+            })
+        if self.used_count > self.usage_limit:
+            raise ValidationError({
+                'used_count': _("Used count cannot exceed usage limit")
+            })
+
+    def save(self, *args, **kwargs):
+        """Auto-update is_expired on save"""
+        if self.expiration_date and self.expiration_date <= timezone.now():
+            self.is_expired = True
+        super().save(*args, **kwargs)
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """Check if coupon can be safely deleted"""
+        if self.used_count > 0:
+            return False, _("Cannot delete coupon that has been used")
+        return super().can_be_deleted()
+
+    def increment_usage(self, commit=True):
+        """Increment the usage count of the coupon"""
+        self.used_count = models.F('used_count') + 1
+        if commit:
+            self.save(update_fields=['used_count'])
+
+    def is_valid(self, cart_total: float = None) -> bool:
         """Comprehensive validation"""
-        if self.is_deleted:
+        if not super().is_valid():
             return False
-        if self.is_expired:
+        if not self.product or not self.product.is_active or self.product.is_deleted:
             return False
-        if datetime.now() > self.expiration_date:
-            return False
-        if self.used_count >= self.usage_limit:
-            return False
-        if cart_total and cart_total < self.minimum_amount:
+        if cart_total is not None and cart_total < self.minimum_amount:
             return False
         return True
 
-    def check_cart_qualifies_for_coupon(self, cart_total: float):
-        """Check if cart qualifies for coupon"""
-        return self.is_valid() and cart_total >= self.minimum_amount
+    def apply_discount(self, amount: Decimal) -> Decimal:
+        """Apply coupon discount to amount"""
+        if not self.is_valid(amount):
+            raise ValidationError(_("Coupon is not valid for this amount"))
+        discount = (amount * Decimal(self.discount_amount / 100)).quantize(Decimal('0.01'))
+        return max(amount - discount, Decimal('0.00'))
 
 
 class Cart(CommonModel):
@@ -321,7 +403,7 @@ class SavedCartItem(CommonModel):
     """
     saved_cart = models.ForeignKey(
         "cart.SavedCart",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='items',
         verbose_name=_('Saved Cart'),
         help_text=_('Saved cart containing this item')

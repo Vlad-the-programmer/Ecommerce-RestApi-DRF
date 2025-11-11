@@ -4,6 +4,7 @@ from django.conf import settings
 from django.db import models
 from django.db.models import Sum
 from django.utils.translation import gettext_lazy as _
+from rest_framework.exceptions import ValidationError
 
 from common.models import CommonModel, ItemCommonModel
 from orders.enums import OrderStatuses
@@ -93,6 +94,30 @@ class OrderItem(ItemCommonModel):
             models.Index(fields=["order", "is_deleted"]),  # Manager pattern
             models.Index(fields=["order", "product", "is_deleted"]),  # Product's orders by status
         ]
+    def is_valid(self) -> bool:
+        """Check if the order item is valid according to business rules."""
+        if not super().is_valid():
+            return False
+
+        # Check required fields
+        required_fields = [
+            self.order_id
+        ]
+        if not all(required_fields):
+            return False
+
+        return True
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """Check if order item can be safely soft-deleted"""
+        if not super().can_be_deleted()[0]:
+            return False, super().can_be_deleted()[1]
+
+        order_can_be_deleted, reason = self.order.can_be_deleted()
+        if not order_can_be_deleted:
+            return False, reason
+
+        return True, ""
 
 
 class Order(CommonModel):
@@ -202,6 +227,11 @@ class Order(CommonModel):
 
     def save(self, *args, **kwargs):
         """Override save to generate order number and calculate total."""
+        is_new = self.pk is None
+
+        if is_new:
+            self.mark_pending()
+
         # Generate order number only for new orders
         if not self.order_number:
             self.order_number = self.generate_order_number()
@@ -238,9 +268,89 @@ class Order(CommonModel):
             total = order_items_total + shipping_total + taxes_total
             return total.quantize(Decimal('0.01'))
 
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if order can be safely soft-deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        # Check parent class constraints
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            return False, reason
+
+        # Check if order has been paid for
+        if self.status in [OrderStatuses.PAID, OrderStatuses.COMPLETED, OrderStatuses.DELIVERED]:
+            return False, "Cannot delete a paid or completed order"
+
+        # Check order items
+        if self.order_items.exists():
+            for order_item in self.order_items.all():
+                if hasattr(order_item, 'product'):
+                    can_be_deleted, reason = order_item.product.can_be_deleted()
+                    if not can_be_deleted:
+                        return False, f"Cannot delete due to product: {reason}"
+
+        # Check invoices
+        invoices = self.invoices.filter(is_active=True)
+        for invoice in invoices:
+            if invoice.payments.exists():
+                if not invoice.is_fully_paid:
+                    return False, "Order has unpaid invoices"
+                return False, "Order has paid invoices"
+
+        # Check shipments
+        if hasattr(self, 'shipments') and self.shipments.exists():
+            return False, "Order has associated shipments"
+
+        return True, ""
+
+    def _is_valid_status_transition(self, old_status: str, new_status: str) -> bool:
+        """Check if the status transition is valid."""
+        status_order = [
+            OrderStatuses.PENDING,
+            OrderStatuses.UNPAID,
+            OrderStatuses.PAID,
+            OrderStatuses.APPROVED,
+            OrderStatuses.PROCESSING,
+            OrderStatuses.SHIPPED,
+            OrderStatuses.DELIVERED,
+            OrderStatuses.COMPLETED,
+            OrderStatuses.CANCELLED,
+            OrderStatuses.REFUNDED,
+        ]
+
+        # Allow status to stay the same
+        if old_status == new_status:
+            return True
+
+        # Special case: can cancel from most statuses
+        if new_status == OrderStatuses.CANCELLED:
+            return True
+
+        # Special case: can refund from completed/delivered
+        if new_status == OrderStatuses.REFUNDED:
+            return old_status in [OrderStatuses.COMPLETED, OrderStatuses.DELIVERED]
+
+        # Otherwise, can only move forward in the status flow
+        try:
+            return status_order.index(new_status) > status_order.index(old_status)
+        except ValueError:
+            return False
+
+    def is_digital_order(self) -> bool:
+        """Check if this is a digital/online order that doesn't require shipping."""
+        return all(item.product.is_digital for item in self.order_items.all() if hasattr(item, 'product'))
+
     def delete(self, *args, **kwargs):
         """Soft delete with status update."""
+        can_delete, reason = self.can_be_deleted()
+        if not can_delete:
+            raise ValidationError(f"Cannot delete order: {reason}")
+
         self.status = OrderStatuses.CANCELLED
+        self.save(update_fields=['status', 'date_updated'])
         super().delete(*args, **kwargs)
 
     @property
@@ -252,7 +362,7 @@ class Order(CommonModel):
     def get_by_order_number(cls, order_number):
         """Helper method to retrieve order by order number."""
         try:
-            return cls.objects.get(order_number=order_number, is_deleted=False)
+            return cls.objects.get(order_number=order_number)
         except cls.DoesNotExist:
             return None
 
@@ -264,6 +374,80 @@ class Order(CommonModel):
         """Get total number of items in order."""
         return self.order_items.aggregate(total=Sum('quantity'))['total'] or 0
 
+    def cancel(self):
+        """Cancel the order."""
+        if not self.can_be_cancelled():
+            raise ValidationError("Order cannot be cancelled.")
+
+        self._is_valid_status_transition(self.status, OrderStatuses.CANCELLED)
+
+        self.status = OrderStatuses.CANCELLED
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
+
+    def mark_completed(self):
+        """Mark the order as completed."""
+        self._is_valid_status_transition(self.status, OrderStatuses.COMPLETED)
+
+        self.status = OrderStatuses.COMPLETED
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
+
+    def mark_delivered(self):
+        """Mark the order as delivered."""
+        self._is_valid_status_transition(self.status, OrderStatuses.DELIVERED)
+
+        self.status = OrderStatuses.DELIVERED
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
+
+    def mark_paid(self):
+        """Mark the order as paid."""
+        self._is_valid_status_transition(self.status, OrderStatuses.PAID)
+
+        self.status = OrderStatuses.PAID
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
+
+    def mark_unpaid(self):
+        """Mark the order as unpaid."""
+        self._is_valid_status_transition(self.status, OrderStatuses.UNPAID)
+
+        self.status = OrderStatuses.UNPAID
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
+
+    def mark_approved(self):
+        """Mark the order as approved."""
+        self._is_valid_status_transition(self.status, OrderStatuses.APPROVED)
+
+        self.status = OrderStatuses.APPROVED
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
+
+    def mark_processing(self):
+        """Mark the order as processing."""
+        self._is_valid_status_transition(self.status, OrderStatuses.PROCESSING)
+
+        self.status = OrderStatuses.PROCESSING
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
+
+    def mark_shipped(self):
+        """Mark the order as shipped."""
+        self._is_valid_status_transition(self.status, OrderStatuses.SHIPPED)
+
+        self.status = OrderStatuses.SHIPPED
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
+
+    def mark_pending(self):
+        """Mark the order as pending."""
+        self._is_valid_status_transition(self.status, OrderStatuses.PENDING)
+
+        self.status = OrderStatuses.PENDING
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
 
 class OrderStatusHistory(CommonModel):
     objects = OrderStatusHistoryManager()

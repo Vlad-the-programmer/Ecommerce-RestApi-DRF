@@ -1,15 +1,15 @@
 import logging
-from datetime import timezone, timedelta
+from datetime import timedelta
 from decimal import Decimal
-from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import Avg
+from django.utils import timezone
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 
 from common.models import CommonModel, SlugFieldCommonModel
+from orders.enums import OrderStatuses
 from orders.models import OrderItem
 from products.enums import (ProductCondition, ProductStatus,
                             StockStatus, ProductLabel,
@@ -17,7 +17,6 @@ from products.enums import (ProductCondition, ProductStatus,
 from products.managers import (ProductManager, ProductReportManager,
                                ProductAdminManager, ProductVariantManager)
 from common.models import AddressBaseModel
-from reviews.utils import get_stars_for_rating
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +41,35 @@ class Location(AddressBaseModel):
             models.Index(fields=['name', 'is_active']),
         ]
 
+    def is_valid(self) -> bool:
+        """Check if location is valid for operations.
+
+        Returns:
+            bool: True if location is valid, False otherwise
+        """
+        return (
+                super().is_valid() and
+                bool(self.name.strip())
+        )
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """Check if location can be safely deleted"""
+        if not super().can_be_deleted()[0]:
+            return False, super().can_be_deleted()[1]
+
+        order_items = OrderItem.objects.filter(product__location=self)
+
+        can_be_deleted_list = [] # List of cam_be_deleted() booleans for each order item
+        for order_item in order_items:
+            can_be_deleted, reason = order_item.can_be_deleted()
+            can_be_deleted_list.append(can_be_deleted)
+
+        # If there are product and order_items associated with the location any order
+        # item cannot be deleted, return False
+        if Product.objects.filter(location=self).exists() and order_items.exists() and not all(can_be_deleted_list):
+            return False, "Cannot delete location that has active order items associated with it"
+        return super().can_be_deleted()
+
 
 class ProductVariant(CommonModel):
     """
@@ -51,7 +79,7 @@ class ProductVariant(CommonModel):
 
     product = models.ForeignKey(
         "Product",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="product_variants"
     )
     sku = models.CharField(
@@ -152,6 +180,53 @@ class ProductVariant(CommonModel):
             ),
         ]
 
+    def is_valid(self) -> bool:
+        """Check if product variant is valid for sale.
+
+        Returns:
+            bool: True if variant is valid for sale, False otherwise
+        """
+        if not super().is_valid():
+            return False
+
+        # Check if the product is valid
+        if not self.product.is_valid():
+            return False
+
+        # Check if variant has required attributes
+        if not any([self.color, self.size, self.material, self.style]):
+            return False
+
+        # Check if variant has a valid SKU
+        if not self.sku or not self.sku.strip():
+            return False
+
+        # For products with inventory tracking, check stock
+        if self.product.track_inventory and not self.is_in_stock:
+            return False
+
+        return True
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if variant can be safely soft-deleted.
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        if not super().can_be_deleted()[0]:
+            return False, super().can_be_deleted()[1]
+
+        # Check for active orders with this variant
+        from orders.models import OrderItem
+        order_items = OrderItem.objects.filter(
+                variant=self,
+                order__status__in=[OrderStatuses.PENDING, OrderStatuses.UNPAID, OrderStatuses.APPROVED, OrderStatuses.SHIPPED, OrderStatuses.PAID, OrderStatuses.COMPLETED, OrderStatuses.DELIVERED]
+        )
+
+        if order_items.exists():
+            return False, "Cannot delete variant with active or pending orders"
+        return True, ""
+
     @property
     def final_price(self):
         """Calculate final price including base price and adjustment"""
@@ -241,7 +316,7 @@ class ProductVariant(CommonModel):
 class ProductImage(CommonModel):
     product = models.ForeignKey(
         "products.Product",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='product_images'
     )
     image = models.ImageField(
@@ -270,6 +345,19 @@ class ProductImage(CommonModel):
             models.Index(fields=['product', 'is_deleted']),
             models.Index(fields=['product', 'display_order', 'is_deleted']),
         ]
+
+    def is_valid(self) -> bool:
+        """Check if product image is valid.
+
+        Returns:
+            bool: True if image is valid, False otherwise
+        """
+        return (
+                super().is_valid() and
+                bool(self.imageURL) and
+                bool(self.alt_text.strip()) and
+                self.product.is_valid()
+        )
 
     def img_preview(self):
         return mark_safe(f'<img src="{self.imageURL}" width="300" height="300" style="object-fit: cover;"/>')
@@ -522,6 +610,53 @@ class Product(SlugFieldCommonModel):
         ]
         ordering = ['product_name']
 
+    def is_valid(self) -> bool:
+        """Check if product is valid for sale.
+
+        Returns:
+            bool: True if product is valid for sale, False otherwise
+        """
+        if not super().is_valid():
+            return False
+
+        # Basic validation
+        if not all([self.product_name.strip(), self.product_description.strip()]):
+            return False
+
+        # Status check
+        if self.status != ProductStatus.PUBLISHED:
+            return False
+
+        # Price validation
+        if self.price <= 0:
+            return False
+
+        # Digital product validation
+        if self.product_type == ProductType.DIGITAL and not self.download_file:
+            return False
+
+        # Service product validation
+        if (self.product_type == ProductType.SERVICE and self.location_required and
+                self.service_type in [ServiceType.CONSULTATION, ServiceType.REPAIR,
+                                      ServiceType.TRAINING, ServiceType.INSTALLATION] and not self.location):
+            return False
+
+        # Check if product has variants
+        if self.has_variants:
+            # If product has variants, at least one variant must be valid
+            if not any(
+                    variant.is_valid() for variant in self.product_variants.filter(is_deleted=False, is_active=True)):
+                return False
+        else:
+            # For products without variants, check stock
+            if self.track_inventory and not self.total_stock_quantity > 0:
+                return False
+
+        # Check if product is expired
+        if self.is_expired:
+            return False
+
+        return True
 
     def save(self, *args, **kwargs):
         # Auto-update stock_status based on variants
@@ -539,6 +674,37 @@ class Product(SlugFieldCommonModel):
             self.stock_status = StockStatus.IN_STOCK
 
         super().save(*args, **kwargs)
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if product can be safely soft-deleted.
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        if not super().can_be_deleted()[0]:
+            return False, super().can_be_deleted()[1]
+
+        variants = self.product_variants.filter(
+                is_deleted=False,
+                is_active=True
+        )
+        # Check for active variants
+        if self.has_variants and variants.exists():
+            return False, "Cannot delete product with active variants"
+
+        for variant in variants:
+            variant_can_be_deleted, reason = variant.can_be_deleted()
+            if not variant_can_be_deleted:
+                return False, reason
+
+        # Check for active promotions
+        if hasattr(self, 'coupons') and self.coupons.filter(
+                is_active=True,
+                end_date__gte=timezone.now()
+        ).exists():
+            return False, "Cannot delete product with active promotions"
+
+        return True, ""
 
     @property
     def total_stock_quantity(self):
@@ -561,6 +727,10 @@ class Product(SlugFieldCommonModel):
         from django.utils import timezone
         expiration_date = self.manufacturing_date + self.shelf_life
         return timezone.now().date() > expiration_date
+
+    @property
+    def is_digital(self):
+        return self.product_type == ProductType.DIGITAL
 
     @property
     def days_until_expiry(self) -> int:

@@ -1,14 +1,19 @@
+from datetime import timedelta
+from decimal import Decimal
+
 from django.core.exceptions import ValidationError
 
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.db.models import Q, F
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from common.models import CommonModel
 from invoices.enums import InvoiceStatus
 from invoices.managers import InvoiceManager
+from payments.models import Payment
 
 
 class Invoice(CommonModel):
@@ -25,6 +30,16 @@ class Invoice(CommonModel):
         related_name="invoices",
         verbose_name=_("User"),
         help_text=_("User or customer associated with this invoice."),
+    )
+
+    order = models.ForeignKey(
+        "orders.Order",
+        on_delete=models.PROTECT,
+        related_name="invoices",
+        verbose_name=_("Order"),
+        help_text=_("The order this invoice is associated with."),
+        null=True,
+        blank=True
     )
 
     invoice_number = models.CharField(
@@ -104,6 +119,21 @@ class Invoice(CommonModel):
                 check=Q(is_deleted=False) | Q(status__in=[InvoiceStatus.CANCELLED]),
                 name="invoice_deleted_only_if_cancelled"
             ),
+
+            models.UniqueConstraint(
+                fields=["order"],
+                name="unique_active_order_invoice",
+                condition=Q(is_deleted=False,
+                            status__in=[InvoiceStatus.DRAFT, InvoiceStatus.ISSUED, InvoiceStatus.OVERDUE])
+            ),
+            models.CheckConstraint(
+                check=Q(order__isnull=True) | ~Q(status=InvoiceStatus.DRAFT),
+                name="draft_invoice_must_have_no_order"
+            ),
+            models.CheckConstraint(
+                check=~Q(status=InvoiceStatus.PAID) | Q(order__isnull=False),
+                name="paid_invoice_must_have_order"
+            ),
         ]
         indexes = CommonModel.Meta.indexes + [
             # Core lookups
@@ -120,16 +150,86 @@ class Invoice(CommonModel):
 
             # Aggregation-friendly composite index
             models.Index(fields=["user", "status", "is_deleted"], name="invoice_user_status_idx"),
+            models.Index(fields=["order", "is_deleted"], name="invoice_order_idx"),
+            models.Index(fields=["order", "status", "is_deleted"], name="invoice_order_status_idx"),
+            models.Index(fields=["status", "due_date", "is_deleted"], name="invoice_status_due_date_idx"),
+            models.Index(fields=["user", "is_paid", "is_deleted"], name="invoice_user_paid_status_idx"),
+            models.Index(fields=["issue_date", "due_date", "status"], name="invoice_dates_status_idx"),
+            models.Index(fields=["total_amount", "currency", "is_deleted"], name="invoice_amount_currency_idx"),
         ]
 
     def __str__(self):
         return f"Invoice #{self.invoice_number} - {self.user} ({self.status})"
 
-    def delete(self, *args, **kwargs):
-        if self.is_paid:
-            raise ValidationError("Cannot delete invoice with completed payments")
+    def is_valid(self) -> bool:
+        """
+        Check if the invoice is valid according to business rules.
 
-        super().delete(*args, **kwargs)
+        Returns:
+            bool: True if invoice is valid, False otherwise
+        """
+        if not super().is_valid():
+            return False
+
+        # Check required fields
+        required_fields = [
+            self.user_id,
+            self.invoice_number,
+            self.issue_date,
+            self.due_date,
+            self.total_amount is not None,
+            self.currency,
+            self.status
+        ]
+        if not all(required_fields):
+            return False
+
+        # Check amount is non-negative
+        if self.total_amount < 0:
+            return False
+
+        # Check due date is not before issue date
+        if self.due_date < self.issue_date:
+            return False
+
+        # Check invoice number format
+        if not (self.invoice_number.startswith('INV-') and len(self.invoice_number.split('-')) == 3):
+            return False
+
+        # Check currency format (3 uppercase letters)
+        if not (len(self.currency) == 3 and self.currency.isalpha() and self.currency.isupper()):
+            return False
+
+        # Check status-specific rules
+        if self.status == InvoiceStatus.PAID and not self.is_fully_paid:
+            return False
+
+        if self.status == InvoiceStatus.CANCELLED and self.is_fully_paid:
+            return False
+
+        # Check order relationship rules
+        if self.status != InvoiceStatus.DRAFT and not self.order_id:
+            return False
+
+        if self.order_id and self.order.is_deleted:
+            return False
+
+        return True
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """Check if invoice can be safely soft-deleted"""
+        if not super().can_be_deleted()[0]:
+            return False, super().can_be_deleted()[1]
+
+        if self.is_fully_paid:
+            return False, "Cannot delete invoice with completed payments"
+
+
+        order_can_be_deleted, reason = self.order.can_be_deleted()
+        if not order_can_be_deleted:
+            return False, reason
+
+        return True, ""
 
     @property
     def is_overdue(self):
@@ -141,29 +241,101 @@ class Invoice(CommonModel):
         )
 
     @property
-    def is_paid(self):
-        """Determine if the invoice is paid."""
-        return self.status == InvoiceStatus.PAID
+    def days_until_due(self) -> int:
+        """Return number of days until the invoice is due. Negative if overdue."""
+        return (self.due_date - timezone.now().date()).days
+
+    @property
+    def is_fully_paid(self) -> bool:
+        """Check if the invoice is fully paid, considering partial payments."""
+        if self.status == InvoiceStatus.PAID:
+            return True
+        # If you implement a payment tracking system later:
+        # return self.amount_paid >= self.total_amount
+        return False
+
+    @property
+    def amount_due(self) -> Decimal:
+        """Calculate the amount still due on this invoice."""
+        if self.status == InvoiceStatus.PAID:
+            return Decimal('0.00')
+        # If you implement a payment tracking system:
+        # return max(self.total_amount - self.amount_paid, Decimal('0.00'))
+        return self.total_amount
+
+    def generate_invoice_number(self) -> str:
+        """Generate a sequential invoice number."""
+        prefix = "INV"
+        date_part = timezone.now().strftime("%Y%m")
+
+        last_invoice = Invoice.objects.filter(
+            invoice_number__startswith=f"{prefix}-{date_part}-"
+        ).order_by('-date_created').first()
+
+        if last_invoice and last_invoice.invoice_number:
+            try:
+                last_num = int(last_invoice.invoice_number.split('-')[-1])
+                new_num = last_num + 1
+            except (IndexError, ValueError):
+                new_num = 1
+        else:
+            new_num = 1
+
+        return f"{prefix}-{date_part}-{new_num:05d}"
 
     def mark_issued(self):
         """Mark the invoice as issued."""
+        self._validate_status_transition(self.status, InvoiceStatus.ISSUED)
+
         self.status = InvoiceStatus.ISSUED
-        self.save(update_fields=["status"])
+        self.save(update_fields=["status", "is_active", "date_updated"])
 
     def mark_paid(self):
         """Mark the invoice as paid."""
+        self._validate_status_transition(self.status, InvoiceStatus.PAID)
+
         self.status = InvoiceStatus.PAID
-        self.save(update_fields=["status"])
+
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
 
     def mark_cancelled(self):
         """Mark the invoice as cancelled."""
         self.status = InvoiceStatus.CANCELLED
-        self.save(update_fields=["status"])
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
 
     def mark_overdue(self):
         """Mark the invoice as overdue."""
+        self._validate_status_transition(self.status, InvoiceStatus.OVERDUE)
+
         self.status = InvoiceStatus.OVERDUE
         self.save(update_fields=["status"])
+
+    def mark_draft(self):
+        """Mark the invoice as draft."""
+        self._validate_status_transition(self.status, InvoiceStatus.DRAFT)
+
+        self.status = InvoiceStatus.DRAFT
+        self.save(update_fields=["status"])
+
+    def save(self, *args, **kwargs):
+        """Override save to handle invoice number generation and validation."""
+        is_new = self._state.adding
+
+        if is_new and not self.invoice_number:
+            self.invoice_number = self.generate_invoice_number()
+
+        if is_new and not self.issue_date:
+            self.issue_date = timezone.now().date()
+
+        if is_new and not self.due_date:
+            self.due_date = self.issue_date + timedelta(days=30)  # 30-day default payment term
+
+        if is_new:
+            self.mark_issued()
+
+        super().save(*args, **kwargs)
 
     def clean(self):
         """Custom validation for business logic."""
@@ -180,3 +352,56 @@ class Invoice(CommonModel):
         if self.due_date < self.issue_date:
             raise ValidationError({"due_date": _("Due date cannot be before issue date.")})
 
+        # Validate invoice status transitions
+        if not self._state.adding:
+            old_instance = Invoice.objects.get(pk=self.pk)
+            self._validate_status_transition(old_instance.status, self.status)
+
+    def _validate_status_transition(self, old_status: str, new_status: str) -> None:
+        """Validate status transitions."""
+        status_order = [
+            InvoiceStatus.DRAFT,
+            InvoiceStatus.ISSUED,
+            InvoiceStatus.OVERDUE,
+            InvoiceStatus.PAID,
+            InvoiceStatus.CANCELLED,
+        ]
+
+        if old_status == new_status:
+            return
+
+        if old_status == InvoiceStatus.CANCELLED:
+            raise ValidationError(_("Cannot change status of a cancelled invoice."))
+
+        if old_status == InvoiceStatus.PAID and new_status != InvoiceStatus.CANCELLED:
+            raise ValidationError(_("Cannot modify a paid invoice."))
+
+        if status_order.index(new_status) < status_order.index(old_status) and new_status != InvoiceStatus.CANCELLED:
+            raise ValidationError(_("Cannot move to a previous status."))
+
+    def add_payment(self, amount: Decimal, payment_method: str, notes: str = "") -> 'Payment':
+        """Record a payment against this invoice."""
+        if self.status == InvoiceStatus.CANCELLED:
+            raise ValidationError(_("Cannot add payment to cancelled invoice."))
+
+        if amount <= 0:
+            raise ValidationError(_("Payment amount must be positive."))
+
+        from payments.models import Payment
+        payment = Payment.objects.create(
+            invoice=self,
+            amount=amount,
+            method=payment_method,
+            currency=self.currency,
+            notes=notes,
+            processed_by=self.user,
+            transaction_date=timezone.now()
+        )
+
+        self.mark_paid()
+
+        # TODO: Maybe add some logic to check if the payment is completed
+        payment.mark_completed()
+
+        self.refresh_from_db()
+        return payment

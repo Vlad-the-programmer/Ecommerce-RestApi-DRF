@@ -137,9 +137,7 @@ class Wishlist(CommonModel):
 
     def get_items_by_priority(self):
         """Get items ordered by priority."""
-        return self.wishlist_items.filter(
-            is_deleted=False
-        ).by_priority()
+        return self.wishlist_items.order_by("-priority")
 
     def move_all_to_cart(self, cart):
         """Move all wishlist items to cart."""
@@ -161,7 +159,7 @@ class WishListItem(ItemCommonModel):
 
     wishlist = models.ForeignKey(
         "wishlist.Wishlist",
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         null=True,
         blank=True,
         related_name="wishlist_items",
@@ -173,7 +171,7 @@ class WishListItem(ItemCommonModel):
         settings.AUTH_USER_MODEL,
         null=True,
         blank=True,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="wishlist_items"
     )
 

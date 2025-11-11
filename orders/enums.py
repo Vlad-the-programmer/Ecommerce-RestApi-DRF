@@ -5,6 +5,7 @@ from django.utils.translation import gettext_lazy as _
 class OrderStatuses(TextChoices):
     PENDING = "pending", _("Pending")
     APPROVED = "approved", _("Approved")
+    PROCESSING = "processing", _("Processing")
     PAID = "paid", _("Paid")
     UNPAID = "unpaid", _("Unpaid")
     SHIPPED = "shipped", _("Shipped")

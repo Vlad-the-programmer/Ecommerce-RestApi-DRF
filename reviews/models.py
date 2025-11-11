@@ -76,6 +76,43 @@ class Review(CommonModel):
     def __str__(self):
         return f"Review by {self.user} for {self.product} ({self.rating}/5)"
 
+    def is_valid(self) -> bool:
+        """
+        Check if the review is valid according to business rules.
+
+        Returns:
+            bool: True if the review is valid, False otherwise
+        """
+        # Call parent's is_valid first
+        if not super().is_valid():
+            return False
+
+        # Check required fields
+        if not all([self.user_id, self.product_id, self.rating is not None]):
+            return False
+
+        # Rating must be between 0 and 5
+        if not (Decimal('0.00') <= self.rating <= Decimal('5.00')):
+            return False
+
+        # If content is provided, it must be non-empty
+        if self.content and not self.content.strip():
+            return False
+
+        # Title, if provided, should not exceed max length
+        if self.title and len(self.title) > 255:
+            return False
+
+        # Check if user exists and is active
+        if hasattr(self, 'user') and (not self.user or not self.user.is_active):
+            return False
+
+        # Check if product exists and is not deleted
+        if hasattr(self, 'product') and (not self.product or self.product.is_deleted):
+            return False
+
+        return True
+
     def clean(self):
         """Ensure rating value is valid."""
         if self.rating < 0 or self.rating > 5:

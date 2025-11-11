@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
@@ -38,6 +40,8 @@ class Payment(CommonModel):
     payment_reference = models.CharField(
         max_length=100,
         unique=True,
+        null=True,
+        blank=True,
         verbose_name=_("Payment Reference"),
         help_text=_("Unique transaction ID from the payment processor or internal system."),
     )
@@ -142,37 +146,142 @@ class Payment(CommonModel):
     def __str__(self):
         return f"Payment {self.payment_reference} ({self.amount} {self.currency}) - {self.status}"
 
-    def delete(self, *args, **kwargs):
-        if self.is_successful:
-            raise ValidationError("Cannot delete payment with completed status")
+    def is_valid(self) -> bool:
+        """
+        Check if the payment is valid according to business rules.
 
-        super().delete(*args, **kwargs)
+        Returns:
+            bool: True if payment is valid, False otherwise
+        """
+        if not super().is_valid():
+            return False
+
+        # Check required fields
+        if not all([self.invoice_id, self.amount, self.currency, self.method, self.status,
+                    self.transaction_date, self.payment_reference]):
+            return False
+
+        # Check amount is positive
+        if self.amount <= 0:
+            return False
+
+        # Check completed payments have confirmation timestamp
+        if self.status == PaymentStatus.COMPLETED and not self.confirmed_at:
+            return False
+
+        # Check payment reference format if exists
+        if self.payment_reference and not self.payment_reference.startswith('PAY-'):
+            return False
+
+        # Check invoice is not deleted
+        if hasattr(self, 'invoice') and self.invoice.is_deleted:
+            return False
+
+        # Check currency is valid (basic check for 3 uppercase letters)
+        if not (len(self.currency) == 3 and self.currency.isalpha() and self.currency.isupper()):
+            return False
+
+        return True
+
+    def save(self, *args, **kwargs):
+        is_new = self._state.adding
+
+        if is_new and not self.payment_reference:
+            self.payment_reference = self.generate_payment_reference()
+
+        if is_new and not self.transaction_date:
+            self.transaction_date = timezone.now()
+
+        if is_new and not self.status:
+            self.status = PaymentStatus.PENDING
+
+        super().save(*args, **kwargs)
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if the payment can be safely deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        # Check parent class constraints first
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            return False, reason
+
+        # Check payment-specific constraints
+        if self.is_successful:
+            return False, "Cannot delete a completed payment"
+
+        if self.status in [PaymentStatus.REFUNDED, PaymentStatus.PENDING]:
+            status_display = dict(PaymentStatus.choices).get(self.status, self.status)
+            return False, f"Cannot delete a payment with status '{status_display}'"
+
+        return True, ""
 
     @property
     def is_successful(self):
         """Returns True if payment is successful."""
         return self.status == PaymentStatus.COMPLETED
 
+    def _validate_status_transition(self, old_status: str, new_status: str) -> None:
+        """Validate status transitions."""
+        status_order = [
+            PaymentStatus.PENDING,
+            PaymentStatus.COMPLETED,
+            PaymentStatus.REFUNDED,
+            PaymentStatus.CANCELLED,
+            PaymentStatus.FAILED,
+        ]
+
+        if old_status == new_status:
+            return
+
+        if old_status == PaymentStatus.CANCELLED:
+            raise ValidationError(_("Cannot change status of a cancelled payment."))
+
+        if old_status == PaymentStatus.COMPLETED and new_status != PaymentStatus.CANCELLED:
+            raise ValidationError(_("Cannot modify a paid invoice."))
+
+        if old_status == PaymentStatus.REFUNDED and new_status != PaymentStatus.CANCELLED:
+            raise ValidationError(_("Cannot modify a refunded invoice."))
+
+        if (status_order.index(new_status) < status_order.index(old_status) and
+                new_status != PaymentStatus.CANCELLED and
+                new_status != PaymentStatus.REFUNDED and
+                new_status != PaymentStatus.COMPLETED and new_status != PaymentStatus.FAILED):
+            raise ValidationError(_("Cannot move to a previous status."))
+
     def mark_completed(self, confirmed_at=None):
         """Mark the payment as completed."""
         self.status = PaymentStatus.COMPLETED
+        self.is_active = False
         self.confirmed_at = confirmed_at or timezone.now()
-        self.save(update_fields=["status", "confirmed_at", "date_updated"])
+        self.save(update_fields=["status", "confirmed_at", "is_active", "date_updated"])
 
     def mark_failed(self):
         """Mark the payment as failed."""
+        self._validate_status_transition(self.status, PaymentStatus.FAILED)
+
         self.status = PaymentStatus.FAILED
-        self.save(update_fields=["status", "date_updated"])
+        self.is_active = False
+        self.save(update_fields=["status", "date_updated", "is_active"])
 
     def mark_refunded(self):
         """Mark the payment as refunded."""
+        self._validate_status_transition(self.status, PaymentStatus.REFUNDED)
+
         self.status = PaymentStatus.REFUNDED
-        self.save(update_fields=["status", "date_updated"])
+        self.is_active = False
+        self.save(update_fields=["status", "date_updated", "is_active"])
 
     def mark_cancelled(self):
         """Mark the payment as cancelled."""
+        self._validate_status_transition(self.status, PaymentStatus.CANCELLED)
+
         self.status = PaymentStatus.CANCELLED
-        self.save(update_fields=["status", "date_updated"])
+        self.is_active = False
+        self.save(update_fields=["status", "date_updated", "is_active"])
 
     def clean(self):
         """Business rule validations."""
@@ -186,6 +295,74 @@ class Payment(CommonModel):
                 "confirmed_at": _("Completed payments must have a confirmation timestamp.")
             })
 
-        # Ensure invoice is not deleted
-        if self.invoice_id and self.invoice.is_deleted:
-            raise ValidationError(_("Cannot create payment for deleted invoice."))
+            # Ensure invoice exists and is not deleted
+        if not hasattr(self, 'invoice') or (self.invoice_id and self.invoice.is_deleted):
+            raise ValidationError({"invoice": _("Cannot create payment for non-existent or deleted invoice.")})
+
+    def generate_payment_reference(self):
+        return f"PAY-{self.uuid}"
+
+    def process_payment(self, payment_data: dict) -> bool:
+        """
+        Process the payment using the provided payment data.
+
+        Args:
+            payment_data: Dictionary containing payment details
+
+        Returns:
+            bool: True if payment was successful, False otherwise
+        """
+        try:
+            # Add payment processing logic here
+            self.status = PaymentStatus.COMPLETED
+            self.confirmed_at = timezone.now()
+            self.save()
+            return True
+        except Exception as e:
+            self.status = PaymentStatus.FAILED
+            self.notes = f"Payment failed: {str(e)}"
+            self.save()
+            return False
+
+    def refund(self, amount: Decimal = None, reason: str = "", refund_method: str = "") -> 'Payment':
+        """
+        Create a refund for this payment.
+
+        Args:
+            amount: Amount to refund (defaults to full amount)
+            reason: Reason for the refund
+
+        Returns:
+            Payment: New refund payment record
+        """
+        if self.status != PaymentStatus.COMPLETED:
+            raise ValidationError("Only completed payments can be refunded")
+
+        refund_amount = amount or self.amount
+        if refund_amount > self.amount:
+            raise ValidationError("Refund amount cannot exceed original payment amount")
+
+        refund = Payment.objects.create(
+            invoice=self.invoice,
+            user=self.user,
+            amount=-refund_amount,
+            currency=self.currency,
+            method=refund_method or self.method,
+            status=PaymentStatus.REFUNDED,
+            notes=f"Refund of payment {self.payment_reference}. {reason}".strip()
+        )
+        refund.mark_completed()
+
+        self.mark_refunded()
+
+        return refund
+
+    @property
+    def status_display(self) -> str:
+        """Return the human-readable status."""
+        return dict(PaymentStatus.choices).get(self.status, self.status)
+
+    def get_amount_display(self) -> str:
+        """Return formatted amount with currency."""
+        from django.utils.numberformat import format
+        return f"{format(self.amount, '.', 2)} {self.currency}"

@@ -8,10 +8,12 @@ from django_countries.fields import CountryField
 
 from common.models import CommonModel
 from .enums import ShippingType, CarrierType
-from .managers import ShippingClassManager
+from .managers import ShippingClassManager, InternationalRateManager
 
 
 class InternationalRate(CommonModel):
+    objects = InternationalRateManager()
+
     country = CountryField(unique=True)
     surcharge = models.DecimalField(max_digits=6, decimal_places=2)
 
@@ -34,6 +36,50 @@ class InternationalRate(CommonModel):
         constraints = [
             models.CheckConstraint(check=models.Q(surcharge__gte=0), name="non_negative_surcharge")
         ]
+
+    def is_valid(self) -> bool:
+        """
+        Check if the international rate is valid according to business rules.
+
+        Returns:
+            bool: True if the international rate is valid, False otherwise
+        """
+        # Call parent's is_valid first
+        if not super().is_valid():
+            return False
+
+        # Check required fields
+        if not all([self.country, self.surcharge is not None]):
+            return False
+
+        # Validate surcharge is non-negative
+        if self.surcharge < 0:
+            return False
+
+        # Check for duplicate active rates for the same country
+        if not self.pk:  # Only check for new instances
+            if InternationalRate.objects.filter(country=self.country).exists():
+                return False
+
+        return True
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if the international rate can be safely deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        # Check parent class constraints first
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            return False, reason
+
+        # Check if this rate is being used by any active shipping classes
+        if ShippingClass.objects.filter(available_countries__contains=[self.country]).exists():
+            return False, "Cannot delete rate used by active shipping classes"
+
+        return True, ""
 
 
 class ShippingClass(CommonModel):
@@ -179,6 +225,49 @@ class ShippingClass(CommonModel):
 
     def __str__(self):
         return f"{self.name} ({self.get_shipping_type_display()})"
+
+    class Meta:
+        db_table = "shipping_classes"
+        verbose_name = _("Shipping Class")
+        verbose_name_plural = _("Shipping Classes")
+        ordering = ["base_cost", "estimated_days_min"]
+        indexes = CommonModel.Meta.indexes + [
+            # Core shipping class indexes
+            models.Index(fields=['shipping_type', 'is_deleted', 'is_active']),
+            models.Index(fields=['carrier_type', 'is_deleted', 'is_active']),
+
+            # Cost and delivery speed indexes
+            models.Index(fields=['free_shipping_threshold', 'is_deleted', 'is_active']),
+
+            # Operational indexes
+            models.Index(fields=['domestic_only', 'is_active', 'is_deleted']),
+
+            # Composite indexes for common queries
+            models.Index(fields=['shipping_type', 'carrier_type', 'is_active', 'is_deleted']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=models.Q(estimated_days_min__lte=models.F('estimated_days_max')),
+                name='valid_estimated_days_range'
+            ),
+            models.CheckConstraint(
+                check=models.Q(base_cost__gt=0),
+                name='non_negative_greater_than_zero_base_cost'
+            ),
+            models.CheckConstraint(
+                check=models.Q(max_weight_kg__gt=0),
+                name='non_negative_greater_than_zero_max_weight_kg'
+            ),
+            models.CheckConstraint(
+                check=models.Q(insurance_cost__gte=0),
+                name='non_negative_insurance_cost'
+            ),
+            models.CheckConstraint(
+                check=models.Q(free_shipping_threshold__gte=0),
+                name='non_negative_free_shipping_threshold'
+            ),
+        ]
+
 
     def get_estimated_delivery(self) -> str:
         """Get formatted estimated delivery timeframe"""
@@ -366,6 +455,85 @@ class ShippingClass(CommonModel):
             }
         }
 
+    def is_valid(self) -> bool:
+        """
+        Check if the shipping class is valid according to business rules.
+
+        Returns:
+            bool: True if the shipping class is valid, False otherwise
+        """
+        # Call parent's is_valid first
+        if not super().is_valid():
+            return False
+
+        # Check required fields
+        required_fields = [
+            self.name,
+            self.base_cost is not None,
+            self.shipping_type in dict(ShippingType.choices),
+            self.carrier_type in dict(CarrierType.choices),
+            self.estimated_days_min is not None,
+            self.estimated_days_max is not None,
+            self.cost_per_kg is not None,
+            self.handling_time_days is not None
+        ]
+
+        if not all(required_fields):
+            return False
+
+        # Validate numeric fields
+        if any([
+            self.base_cost < 0,
+            self.cost_per_kg < 0,
+            self.insurance_cost < 0,
+            self.handling_time_days < 0,
+            self.estimated_days_min < 0,
+            self.estimated_days_max < 1,
+            self.estimated_days_min > self.estimated_days_max
+        ]):
+            return False
+
+        # Validate weight constraints
+        if self.max_weight_kg is not None and self.max_weight_kg <= 0:
+            return False
+
+        # Validate free shipping threshold if set
+        if self.free_shipping_threshold is not None and self.free_shipping_threshold < 0:
+            return False
+
+        # For international shipping, check available countries
+        if self.shipping_type == ShippingType.INTERNATIONAL and not self.available_countries.exists():
+            return False
+
+        return True
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if the shipping class can be safely deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        # Check parent class constraints first
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            return False, reason
+
+        # Check if there are any orders using this shipping class
+        from orders.models import Order
+        if Order.objects.filter(shipping_class=self, is_deleted=False).exists():
+            return False, "Cannot delete shipping class with associated orders"
+
+        # Check if this is the only active shipping class of its type
+        if self.is_active and not ShippingClass.objects.filter(
+            shipping_type=self.shipping_type,
+            is_active=True,
+            is_deleted=False
+        ).exclude(pk=self.pk).exists():
+            return False, f"Cannot delete the only active {self.get_shipping_type_display()} shipping class"
+
+        return True, ""
+
     def clean(self):
         """Validate shipping class data"""
         from django.core.exceptions import ValidationError
@@ -390,45 +558,4 @@ class ShippingClass(CommonModel):
                 'max_weight_kg': _("Maximum weight must be greater than 0")
             })
 
-    class Meta:
-        db_table = "shipping_classes"
-        verbose_name = _("Shipping Class")
-        verbose_name_plural = _("Shipping Classes")
-        ordering = ["base_cost", "estimated_days_min"]
-        indexes = CommonModel.Meta.indexes + [
-            # Core shipping class indexes
-            models.Index(fields=['shipping_type', 'is_deleted', 'is_active']),
-            models.Index(fields=['carrier_type', 'is_deleted', 'is_active']),
-
-            # Cost and delivery speed indexes
-            models.Index(fields=['free_shipping_threshold', 'is_deleted', 'is_active']),
-
-            # Operational indexes
-            models.Index(fields=['domestic_only', 'is_active', 'is_deleted']),
-
-            # Composite indexes for common queries
-            models.Index(fields=['shipping_type', 'carrier_type', 'is_active', 'is_deleted']),
-        ]
-        constraints = [
-            models.CheckConstraint(
-                check=models.Q(estimated_days_min__lte=models.F('estimated_days_max')),
-                name='valid_estimated_days_range'
-            ),
-            models.CheckConstraint(
-                check=models.Q(base_cost__gt=0),
-                name='non_negative_greater_than_zero_base_cost'
-            ),
-            models.CheckConstraint(
-                check=models.Q(max_weight_kg__gt=0),
-                name='non_negative_greater_than_zero_max_weight_kg'
-            ),
-            models.CheckConstraint(
-                check=models.Q(insurance_cost__gte=0),
-                name='non_negative_insurance_cost'
-            ),
-            models.CheckConstraint(
-                check=models.Q(free_shipping_threshold__gte=0),
-                name='non_negative_free_shipping_threshold'
-            ),
-        ]
 

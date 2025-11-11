@@ -59,6 +59,10 @@ class CouponManager(SoftDeleteManager):
         """Get coupon by code (case-insensitive)"""
         return self.get_queryset().filter(coupon_code__iexact=code).first()
 
+    def by_product(self, product_id):
+        """Get coupons for specific product"""
+        return self.get_queryset().filter(product_id=product_id)
+
 
 class CartItemManager(SoftDeleteManager):
     """

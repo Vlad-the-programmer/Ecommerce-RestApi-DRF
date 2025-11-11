@@ -182,6 +182,29 @@ class WarehouseProfile(AddressBaseModel):
 
     objects = WarehouseManager()
 
+    def is_valid(self) -> bool:
+        """Check if warehouse is valid for operations.
+
+        Returns:
+            bool: True if warehouse is valid for operations, False otherwise
+        """
+        return (
+                super().is_valid() and
+                self.is_operational and
+                self.is_available_for_fulfillment and
+                not self.is_at_capacity
+        )
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """Check if warehouse can be safely soft-deleted"""
+        if not super().can_be_deleted()[0]:
+            return False, super().can_be_deleted()[1]
+
+        if self.is_operational:
+            return False, "Cannot delete operational warehouse"
+
+        return True, ""
+
     def clean(self):
         """Additional validation"""
         super().clean()
@@ -191,10 +214,10 @@ class WarehouseProfile(AddressBaseModel):
             raise ValidationError(_("Utilization cannot exceed 100%"))
 
         # Validate main warehouse uniqueness per country
-        if self.warehouse_type == 'main' and self.is_operational:
+        if self.warehouse_type == WAREHOUSE_TYPE.MAIN and self.is_operational:
             existing_main = WarehouseProfile.objects.filter(
                 country=self.country,
-                warehouse_type='main',
+                warehouse_type=WAREHOUSE_TYPE.MAIN,
                 is_operational=True,
                 is_deleted=False
             ).exclude(pk=self.pk)
@@ -232,7 +255,7 @@ class WarehouseProfile(AddressBaseModel):
 class Inventory(CommonModel):
     product_variant = models.ForeignKey(
         'products.ProductVariant',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='inventory_records'
     )
     warehouse = models.ForeignKey(
@@ -360,6 +383,46 @@ class Inventory(CommonModel):
         ordering = ['warehouse', 'product_variant']
 
     objects = InventoryManager()
+
+    def is_valid(self) -> bool:
+        """Check if inventory is valid for order fulfillment.
+
+        Returns:
+            bool: True if inventory is valid for fulfillment, False otherwise
+        """
+        if not super().is_valid():
+            return False
+
+        # Check if warehouse is valid
+        if not self.warehouse.is_valid():
+            return False
+
+        # Check if product variant is valid
+        if not self.product_variant.is_valid():
+            return False
+
+        # Check if inventory is not expired
+        if self.is_expired:
+            return False
+
+        # Check if we have available stock
+        return self.quantity_available > 0
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """Check if inventory can be safely soft-deleted"""
+        if not super().can_be_deleted()[0]:
+            return False, super().can_be_deleted()[1]
+
+        if self.product_variant:
+            can_be_deleted, reason = self.product_variant.can_be_deleted()
+            if not can_be_deleted:
+                return False, reason
+
+        # Check if warehouse is operational (inverse logic - we can delete if warehouse is NOT operational)
+        if self.warehouse and self.warehouse.is_operational:
+            return False, "Cannot delete inventory from operational warehouse"
+
+        return True, ""
 
     @property
     def total_landed_cost(self):

@@ -18,7 +18,7 @@ from rest_framework.exceptions import ValidationError
 
 from cart.managers import CartItemManager
 from common.managers import SoftDeleteManager
-
+from orders.enums import OrderStatuses
 
 logger = logging.getLogger(__name__)
 
@@ -50,29 +50,93 @@ class CommonModel(models.Model):
             models.Index(fields=['date_created', 'is_active', 'is_deleted']),
 
         ]
+        constraints = [
+            models.CheckConstraint(
+                name="%(app_label)s_%(class)s_deleted_consistency",
+                check=(
+                        models.Q(is_deleted=True, date_deleted__isnull=False) |
+                        models.Q(is_deleted=False, date_deleted__isnull=True)
+                )
+            )
+        ]
+
+    def is_valid(self, *args, **kwargs) -> bool:
+        """Check if item is valid.
+
+        Returns:
+            bool: True if the item is active and not deleted, False otherwise
+        """
+        return self.is_active and not self.is_deleted
+
+    def save(self, *args, **kwargs):
+        self.is_valid()
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if item can be safely soft-deleted.
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        if self.is_deleted:
+            return False, f"{self.__class__.__name__.title()} is already deleted"
+
+        return True, ""
+
+    def _check_can_be_deleted_or_raise_error(self):
+        # Check if can be deleted
+        can_delete, reason = self.can_be_deleted()
+        if not can_delete:
+            raise ValidationError(reason)
 
     def delete(self, *args, **kwargs):
-        """Soft delete: mark as deleted, cascade to related objects."""
-        if self.is_deleted:
-            return  # Already deleted
+        """Soft delete: mark as deleted and update related objects."""
 
+        self._check_can_be_deleted_or_raise_error()
+
+        # Update instance fields
         self.is_deleted = True
         self.is_active = False
         self.date_deleted = timezone.now()
-        self.save(update_fields=["is_deleted", "is_active", "date_deleted"])
 
-        # Soft cascade: mark related CASCADE FKs as deleted too
+        # Save without triggering signals if specified
+        update_fields = ["is_deleted", "is_active", "date_deleted"]
+        if kwargs.pop('update_fields', True):
+            self.save(update_fields=update_fields)
+        else:
+            # Direct SQL update to avoid signal recursion
+            self.__class__._default_manager.filter(pk=self.pk).update(
+                is_deleted=True,
+                is_active=False,
+                date_deleted=timezone.now()
+            )
+            # Update instance to reflect changes
+            for field in update_fields:
+                setattr(self, field, getattr(self.__class__._default_filter(pk=self.pk).first(), field, None))
+
+        # Handle related objects with PROTECT or SET_NULL
         for rel in self._meta.related_objects:
-            if rel.on_delete == models.CASCADE:
-                related_manager = getattr(self, rel.get_accessor_name(), None)
-                if related_manager and hasattr(related_manager, 'all'):
-                    # Only call .all() if it's a manager (not a single related object)
-                    qs = related_manager.all()
-                    for obj in qs:
-                        if isinstance(obj, CommonModel):
-                            obj.delete()
+            related_manager = getattr(self, rel.get_accessor_name(), None)
+            if not related_manager:
+                continue
+
+            if rel.on_delete == models.PROTECT:
+                if related_manager.exists():
+                    raise ValidationError(
+                        f"Cannot delete {self._meta.verbose_name} because it is referenced by {rel.related_model._meta.verbose_name}"
+                    )
+            elif rel.on_delete == models.SET_NULL:
+                if hasattr(related_manager, 'all'):
+                    # For many-to-many or reverse foreign key
+                    related_manager.update(**{rel.field.name: None})
+                else:
+                    # For one-to-one or foreign key
+                    setattr(self, rel.get_accessor_name(), None)
+                    self.save(update_fields=[rel.get_accessor_name().split('_')[0]])
 
     def hard_delete(self, *args, **kwargs):
+        self._check_can_be_deleted_or_raise_error()
         return super().delete(*args, **kwargs)
 
     def restore(self):
@@ -82,7 +146,7 @@ class CommonModel(models.Model):
         self.date_deleted = None
         self.save()
 
-        # ✅ ADD: Auto-restore related CASCADE objects
+        # ADD: Auto-restore related CASCADE objects
         for rel in self._meta.related_objects:
             if rel.on_delete == models.CASCADE:
                 related_manager = getattr(self, rel.get_accessor_name(), None)
@@ -208,6 +272,25 @@ class ItemCommonModel(CommonModel):
                 name='quantity_must_be_at_least_1'
             )
         ]
+
+    def can_be_deleted(self):
+        """Check if item can be safely soft-deleted."""
+        if not super().can_be_deleted()[0]:
+            return False, super().can_be_deleted()[1]
+
+        # Check for active orders with this variant
+        from orders.models import OrderItem
+        if OrderItem.objects.filter(
+                variant=self,
+                order__status__in=[OrderStatuses.PENDING, OrderStatuses.APPROVED, OrderStatuses.SHIPPED,
+                                   OrderStatuses.PAID, OrderStatuses.UNPAID, OrderStatuses.COMPLETED,
+                                   OrderStatuses.DELIVERED]
+        ).exists():
+            return False, "Cannot delete variant with active or pending orders"
+
+        product_can_be_deleted, reason = self.product.can_be_deleted()
+        if not product_can_be_deleted:
+            return False, reason
 
     @property
     def is_available(self):
@@ -444,12 +527,6 @@ class ItemCommonModel(CommonModel):
         super().save(*args, **kwargs)
 
 
-from django.utils.text import slugify
-from django.db import models
-from typing import Optional
-import uuid
-
-
 class SlugFieldCommonModel(CommonModel):
     """Common model for models with slug field"""
     slug_fields = []  # List of fields to use for slug generation (must set in child model)
@@ -554,7 +631,7 @@ class SlugFieldCommonModel(CommonModel):
 
 
 class ShippingAddress(AddressBaseModel):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name="shipping_addresses")
     is_default = models.BooleanField(default=False, help_text=_("Set as default shipping address"))
 
@@ -592,9 +669,18 @@ class ShippingAddress(AddressBaseModel):
             )
         ]
 
+    def can_be_deleted(self) -> tuple[bool, str]:
+        from orders.models import Order
+        active_orders_with_address = Order.objects.filter(user=self.user, shipping_address=self)
+
+        if active_orders_with_address.exists():
+            return False, _("This address is currently in use in active orders and cannot be deleted.")
+
+        return True, ""
+
 
 class BillingAddress(AddressBaseModel):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name="billing_addresses")
 
     # Company information (for business purchases)

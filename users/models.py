@@ -13,7 +13,7 @@ from users.enums import UserRole, Gender
 
 class UserRoles(CommonModel):
     """User Role model. It is used to assign a role to a user."""
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name="user_roles")
     role = models.CharField(max_length=50, choices=UserRole.choices)
     description = models.TextField(max_length=2000, blank=True, null=True)
@@ -96,7 +96,7 @@ class Profile(CommonModel):
 
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name='profile'
     )
     gender = models.CharField(
