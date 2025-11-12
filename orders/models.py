@@ -1,3 +1,4 @@
+import logging
 from decimal import Decimal
 
 from django.conf import settings
@@ -9,6 +10,8 @@ from rest_framework.exceptions import ValidationError
 from common.models import CommonModel, ItemCommonModel
 from orders.enums import OrderStatuses
 from orders.managers import OrderTaxManager, OrderItemManager, OrderManager, OrderStatusHistoryManager
+
+logger = logging.getLogger(__name__)
 
 
 class OrderTax(CommonModel):
@@ -66,11 +69,65 @@ class OrderTax(CommonModel):
             ),
         ]
 
+    def is_valid(self, *args, **kwargs) -> bool:
+        """Check if the order tax is valid.
+        
+        Returns:
+            bool: True if the order tax is valid, False otherwise.
+        """
+        # Check parent class validation
+        if not super().is_valid():
+            return False
+            
+        # Check if order exists and is valid
+        if not hasattr(self, 'order') or not self.order or self.order.is_deleted:
+            return False
+            
+        # Check if amount is valid
+        if self.amount < 0:
+            return False
+            
+        # Check if rate is within valid range (0-1)
+        if not (0 <= float(self.rate) <= 1):
+            return False
+            
+        # Check if tax_value is correctly calculated
+        expected_tax = Decimal(str(self.amount)) * Decimal(str(self.rate))
+        if abs(float(self.tax_value) - float(expected_tax)) > 0.01:  # Allow for small floating point differences
+            return False
+            
+        # Check if amount_with_taxes is correctly calculated
+        expected_total = self.amount + self.tax_value
+        if abs(float(self.amount_with_taxes) - float(expected_total)) > 0.01:
+            return False
+            
+        return True
+        
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """Check if the order tax can be safely deleted.
+        
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        # Check parent class validation
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            return False, reason
+            
+        # Check if order exists and is in a state that allows tax deletion
+        if not hasattr(self, 'order') or not self.order:
+            return True, ""
+            
+        # Prevent deletion if order is not in a draft or pending state
+        if self.order.status not in [OrderStatuses.PENDING, OrderStatuses.DRAFT]:
+            return False, "Cannot delete tax from an order that is not in draft or pending status"
+            
+        return True, ""
+        
     def save(self, *args, **kwargs):
         # compute tax-inclusive amount
-        self.tax_value = Decimal(self.amount) * Decimal(self.rate)
+        self.tax_value = Decimal(str(self.amount)) * Decimal(str(self.rate))
         self.amount_with_taxes = self.amount + self.tax_value
-
         super().save(*args, **kwargs)
 
 
@@ -94,31 +151,80 @@ class OrderItem(ItemCommonModel):
             models.Index(fields=["order", "is_deleted"]),  # Manager pattern
             models.Index(fields=["order", "product", "is_deleted"]),  # Product's orders by status
         ]
-    def is_valid(self) -> bool:
-        """Check if the order item is valid according to business rules."""
+    def is_valid(self, *args, **kwargs) -> bool:
+        """Check if the order item is valid according to business rules.
+        
+        Validates:
+        1. Parent class validation (is_active, is_deleted, etc.)
+        2. Order exists and is valid
+        3. Product or variant exists and is valid
+        4. Quantity is valid
+        5. Total price is correctly calculated
+        
+        Returns:
+            bool: True if the order item is valid, False otherwise.
+        """
+        # Check parent class validation
         if not super().is_valid():
             return False
-
-        # Check required fields
-        required_fields = [
-            self.order_id
-        ]
-        if not all(required_fields):
+            
+        # Check if order exists and is valid
+        if not hasattr(self, 'order') or not self.order or self.order.is_deleted:
             return False
-
+            
+        # Check if either product or variant exists
+        if not self.product_id and not self.variant_id:
+            return False
+            
+        # Check if variant belongs to product (if both are specified)
+        if self.product_id and self.variant_id and self.variant.product_id != self.product_id:
+            return False
+            
+        # Check if quantity is valid
+        if self.quantity < 1:
+            return False
+            
+        # Check if total price is valid
+        if self.total_price < 0:
+            return False
+            
+        # If this is an update, check if the order is in a state that allows item modifications
+        if self.pk and self.order.status not in [OrderStatuses.PENDING, OrderStatuses.DRAFT]:
+            return False
+            
         return True
 
     def can_be_deleted(self) -> tuple[bool, str]:
-        """Check if order item can be safely soft-deleted"""
-        if not super().can_be_deleted()[0]:
-            return False, super().can_be_deleted()[1]
+        """Check if the order item can be safely deleted.
 
-        order_can_be_deleted, reason = self.order.can_be_deleted()
-        if not order_can_be_deleted:
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+                - can_delete: True if the order item can be deleted, False otherwise
+                - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
+        """
+        # Check parent class validation
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
             return False, reason
 
-        return True, ""
+        # Check if order exists and is in a state that allows item deletion
+        if not hasattr(self, 'order') or not self.order:
+            return True, ""
 
+        # Prevent deletion if order is not in a draft or pending state
+        if self.order.status not in [OrderStatuses.DRAFT, OrderStatuses.PENDING]:
+            return False, "Cannot delete items from an order that is not in draft or pending status"
+
+        # Check if there are any associated shipments
+        if hasattr(self, 'shipment_items') and self.shipment_items.exists():
+            return False, "Cannot delete order item that has been shipped"
+
+        # Check if there are any associated refunds
+        if hasattr(self, 'refund_items') and self.refund_items.exists():
+            return False, "Cannot delete order item that has refunds"
+
+        return True, ""
+        
 
 class Order(CommonModel):
     """
@@ -203,6 +309,60 @@ class Order(CommonModel):
             models.Index(fields=['shipping_address', 'is_deleted', 'is_active']),
 
         ]
+        constraints = [
+            # Ensure total_amount is non-negative
+            models.CheckConstraint(
+                check=models.Q(total_amount__gte=0),
+                name='%(app_label)s_%(class)s_positive_total_amount',
+                violation_error_message='Total amount cannot be negative.'
+            ),
+            # Ensure order_number is unique and not empty when not null
+            models.UniqueConstraint(
+                fields=['order_number'],
+                name='%(app_label)s_%(class)s_unique_order_number',
+                condition=models.Q(order_number__isnull=False),
+                violation_error_message='Order number must be unique.'
+            ),
+            # Ensure order has a shipping address if it's not a digital order
+            models.CheckConstraint(
+                check=(
+                        models.Q(is_digital_order=True) |
+                        models.Q(shipping_address__isnull=False)
+                ),
+                name='%(app_label)s_%(class)s_shipping_address_required',
+                violation_error_message='Shipping address is required for non-digital orders.'
+            ),
+            # Ensure order has at least one item
+            models.CheckConstraint(
+                check=models.Exists(
+                    OrderItem.objects.filter(
+                        order_id=models.OuterRef('pk'),
+                        is_deleted=False
+                    )
+                ),
+                name='%(app_label)s_%(class)s_has_items',
+                violation_error_message='Order must have at least one item.'
+            ),
+            # Prevent modifying completed/cancelled orders
+            models.CheckConstraint(
+                check=~models.Q(status__in=[
+                    OrderStatuses.COMPLETED,
+                    OrderStatuses.CANCELLED,
+                    OrderStatuses.REFUNDED
+                ]) | models.Q(
+                    models.Q(status__in=[
+                        OrderStatuses.COMPLETED,
+                        OrderStatuses.CANCELLED,
+                        OrderStatuses.REFUNDED
+                    ]) & models.Q(
+                        is_deleted=False,
+                        is_active=True
+                    )
+                ),
+                name='%(app_label)s_%(class)s_protect_completed_orders',
+                violation_error_message='Completed, cancelled, or refunded orders cannot be modified.'
+            )
+        ]
 
 
     def __str__(self):
@@ -227,7 +387,7 @@ class Order(CommonModel):
 
     def save(self, *args, **kwargs):
         """Override save to generate order number and calculate total."""
-        is_new = self.pk is None
+        is_new = self._state.adding
 
         if is_new:
             self.mark_pending()
@@ -244,29 +404,101 @@ class Order(CommonModel):
         self.total_amount = self.get_order_total_amount()
         super().save(*args, **kwargs)
 
-    def get_order_total_amount(self) -> Decimal:
-            """
-            Calculate the total amount for the order.
-            """
-            order_items_total = (
-                    self.order_items.aggregate(total=Sum('total_price'))['total'] or Decimal('0.00')
-            )
+    def delete(self, *args, **kwargs):
+        """Soft delete with status update."""
+        can_delete, reason = self.can_be_deleted()
+        if not can_delete:
+            logger.warning(f"Cannot delete order: {reason}")
+            raise ValidationError(f"Cannot delete order: {reason}")
 
-            # Calculate shipping cost properly
-            if self.shipping_class:
-                order_weight = self.shipping_class.calculate_order_weight(self)
-                shipping_total = self.shipping_class.calculate_shipping_cost(
-                    order_total=order_items_total,
-                    weight_kg=order_weight,
-                    destination_country_code=self.shipping_address.country.code if self.shipping_address else None
-                )
-            else:
-                shipping_total = Decimal('0.00')
+        self.status = OrderStatuses.CANCELLED
+        self.save(update_fields=['status', 'date_updated'])
+        super().delete(*args, **kwargs)
 
-            taxes_total = self.order_taxes.aggregate(total=Sum('tax_value'))['total'] or Decimal('0.00')
+    def is_valid(self, *args, **kwargs) -> bool:
+        """Check if the order is valid according to business rules.
 
-            total = order_items_total + shipping_total + taxes_total
-            return total.quantize(Decimal('0.01'))
+        Validates:
+        1. Parent class validation (is_active, is_deleted, etc.)
+        2. Required fields are present
+        3. Order number format is valid
+        4. Total amount is non-negative
+        5. Shipping address is valid (if required)
+        6. Order items are valid
+        7. Order taxes are valid
+        8. Status transition is valid (if status is being changed)
+
+        Returns:
+            bool: True if the order is valid, False otherwise
+        """
+        # Check parent class validation
+        if not super().is_valid():
+            return False
+
+        # Check required fields
+        required_fields = {
+            'order_number': self.order_number,
+            'user': self.user,
+            'cart': self.cart,
+            'total_amount': self.total_amount is not None,
+            'status': self.status,
+        }
+
+        for field, value in required_fields.items():
+            if not value:
+                logger.warning(f"Order validation failed: Missing required field {field}")
+                return False
+
+        # Validate order number format
+        if not (isinstance(self.order_number, str) and
+                len(self.order_number) > 0 and
+                self.order_number.startswith('ORD-')):
+            logger.warning(f"Order validation failed: Invalid order number format: {self.order_number}")
+            return False
+
+        # Validate total amount
+        if self.total_amount < Decimal('0.00'):
+            logger.warning(f"Order validation failed: Total amount cannot be negative: {self.total_amount}")
+            return False
+
+        # Validate shipping requirements
+        if not self.is_digital_order() and not self.shipping_address:
+            logger.warning("Order validation failed: Shipping address is required for non-digital orders")
+            return False
+
+        if self.shipping_address and not self.shipping_address.is_valid():
+            logger.warning("Order validation failed: Invalid shipping address")
+            return False
+
+        # Validate order items
+        if not hasattr(self, 'order_items') or not self.order_items.exists():
+            logger.warning("Order validation failed: Order must have at least one item")
+            return False
+
+        for item in self.order_items.all():
+            if not item.is_valid():
+                logger.warning(f"Order validation failed: Invalid order item {item.id}")
+                return False
+
+        # Validate order taxes
+        if hasattr(self, 'order_taxes'):
+            for tax in self.order_taxes.all():
+                if not tax.is_valid():
+                    logger.warning(f"Order validation failed: Invalid order tax {tax.id}")
+                    return False
+
+        # Validate status transition if this is an update
+        if self.pk:
+            try:
+                old_status = Order.objects.get(pk=self.pk).status
+                if old_status != self.status and not self._is_valid_status_transition(old_status, self.status):
+                    logger.warning(f"Order validation failed: Invalid status transition from {old_status} to {self.status}")
+                    return False
+            except Order.DoesNotExist:
+                logger.warning("Order validation failed: Order does not exist")
+                return False
+
+        return True
 
     def can_be_deleted(self) -> tuple[bool, str]:
         """
@@ -343,28 +575,34 @@ class Order(CommonModel):
         """Check if this is a digital/online order that doesn't require shipping."""
         return all(item.product.is_digital for item in self.order_items.all() if hasattr(item, 'product'))
 
-    def delete(self, *args, **kwargs):
-        """Soft delete with status update."""
-        can_delete, reason = self.can_be_deleted()
-        if not can_delete:
-            raise ValidationError(f"Cannot delete order: {reason}")
+    def get_order_total_amount(self) -> Decimal:
+            """
+            Calculate the total amount for the order.
+            """
+            order_items_total = (
+                    self.order_items.aggregate(total=Sum('total_price'))['total'] or Decimal('0.00')
+            )
 
-        self.status = OrderStatuses.CANCELLED
-        self.save(update_fields=['status', 'date_updated'])
-        super().delete(*args, **kwargs)
+            # Calculate shipping cost properly
+            if self.shipping_class:
+                order_weight = self.shipping_class.calculate_order_weight(self)
+                shipping_total = self.shipping_class.calculate_shipping_cost(
+                    order_total=order_items_total,
+                    weight_kg=order_weight,
+                    destination_country_code=self.shipping_address.country.code if self.shipping_address else None
+                )
+            else:
+                shipping_total = Decimal('0.00')
+
+            taxes_total = self.order_taxes.aggregate(total=Sum('tax_value'))['total'] or Decimal('0.00')
+
+            total = order_items_total + shipping_total + taxes_total
+            return total.quantize(Decimal('0.01'))
 
     @property
     def display_order_number(self):
         """Formatted order number for display."""
         return self.order_number
-
-    @classmethod
-    def get_by_order_number(cls, order_number):
-        """Helper method to retrieve order by order number."""
-        try:
-            return cls.objects.get(order_number=order_number)
-        except cls.DoesNotExist:
-            return None
 
     def can_be_cancelled(self):
         """Check if order can be cancelled."""
@@ -449,6 +687,7 @@ class Order(CommonModel):
         self.is_active = False
         self.save(update_fields=["status", "is_active", "date_updated"])
 
+
 class OrderStatusHistory(CommonModel):
     objects = OrderStatusHistoryManager()
 
@@ -481,8 +720,108 @@ class OrderStatusHistory(CommonModel):
             models.Index(fields=['status', 'date_created', 'is_deleted']),  # Admin filtering by status/time
             models.Index(fields=['changed_by', 'date_created', 'is_deleted']),
         ]
-
+        constraints = [
+        # Ensure status is a valid choice
+        models.CheckConstraint(
+            check=models.Q(status__in=dict(OrderStatuses.choices).keys()),
+            name='%(app_label)s_%(class)s_valid_status',
+            violation_error_message=_('Invalid status value.')
+        ),
+        # Prevent duplicate status transitions at the same time
+        models.UniqueConstraint(
+            fields=['order', 'status', 'date_created'],
+            name='%(app_label)s_%(class)s_unique_status_per_timestamp',
+            violation_error_message=_('Duplicate status change detected.')
+        )
+    ]
 
     def __str__(self):
-        return f"Order {self.order.order_number} - {self.status} at {self.date_created}"
+        return f"Order {self.order.order_number} - {self.get_status_display()} at {self.date_created}"
+
+    def is_valid(self, *args, **kwargs) -> bool:
+        """
+        Check if the status history record is valid.
+
+        Validates:
+        1. Parent class validation (is_active, is_deleted, etc.)
+        2. Order exists and is valid
+        3. Status is a valid choice
+        4. Status transition is valid for the order
+        5. Changed_by user exists (if provided)
+
+        Returns:
+            bool: True if the status history record is valid, False otherwise
+        """
+        # Check parent class validation
+        if not super().is_valid():
+            logger.warning("OrderStatusHistory validation failed: Parent class validation failed")
+            return False
+
+        # Check required fields
+        required_fields = {
+            'order': self.order_id,
+            'status': self.status
+        }
+
+        for field, value in required_fields.items():
+            if not value:
+                logger.warning(f"OrderStatusHistory validation failed: Missing required field {field}")
+                return False
+
+        # Validate status is a valid choice
+        if self.status not in dict(OrderStatuses.choices):
+            logger.warning(f"OrderStatusHistory validation failed: Invalid status {self.status}")
+            return False
+
+        # If this is an update, check if the status is being changed
+        if self.pk:
+            try:
+                old_status = OrderStatusHistory.objects.get(pk=self.pk).status
+                if old_status != self.status:
+                    logger.warning(
+                        "OrderStatusHistory validation failed: Cannot change status of existing history record")
+                    return False
+            except OrderStatusHistory.DoesNotExist:
+                pass
+
+        # If changed_by is provided, check the user exists
+        if self.changed_by_id and not hasattr(self, 'changed_by'):
+            logger.warning("OrderStatusHistory validation failed: Invalid changed_by user")
+            return False
+
+        return True
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if the status history record can be safely deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+                - can_delete: True if the record can be deleted, False otherwise
+                - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
+        """
+        # Check parent class constraints
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            return False, reason
+
+        # Prevent deletion of the most recent status history for an order
+        try:
+            latest_status = OrderStatusHistory.objects.filter(
+                order_id=self.order_id,
+                is_deleted=False
+            ).latest('date_created')
+
+            if self.pk == latest_status.pk:
+                return False, "Cannot delete the most recent status history record"
+
+        except OrderStatusHistory.DoesNotExist:
+            pass
+
+        # Check if this status is currently active on the order
+        if hasattr(self, 'order') and self.order.status == self.status:
+            return False, f"Cannot delete active status history for order {self.order.order_number}"
+
+        return True, ""
+
 

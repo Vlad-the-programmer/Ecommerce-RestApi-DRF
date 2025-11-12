@@ -153,7 +153,6 @@ class Invoice(CommonModel):
             models.Index(fields=["order", "is_deleted"], name="invoice_order_idx"),
             models.Index(fields=["order", "status", "is_deleted"], name="invoice_order_status_idx"),
             models.Index(fields=["status", "due_date", "is_deleted"], name="invoice_status_due_date_idx"),
-            models.Index(fields=["user", "is_paid", "is_deleted"], name="invoice_user_paid_status_idx"),
             models.Index(fields=["issue_date", "due_date", "status"], name="invoice_dates_status_idx"),
             models.Index(fields=["total_amount", "currency", "is_deleted"], name="invoice_amount_currency_idx"),
         ]

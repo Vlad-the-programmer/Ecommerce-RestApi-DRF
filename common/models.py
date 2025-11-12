@@ -69,9 +69,16 @@ class CommonModel(models.Model):
         return self.is_active and not self.is_deleted
 
     def save(self, *args, **kwargs):
-        self.is_valid()
         self.full_clean()
         super().save(*args, **kwargs)
+        logger.info(f"{self._meta.verbose_name} saved: {self}")
+
+    def clean(self):
+        """Run model validation before saving."""
+        if not self.is_valid():
+            logger.error(f"Cannot save invalid {self._meta.verbose_name}: {self}")
+            raise ValidationError(_(f"Cannot save invalid {self._meta.verbose_name}"))
+        super().clean()
 
     def can_be_deleted(self) -> tuple[bool, str]:
         """
@@ -88,7 +95,8 @@ class CommonModel(models.Model):
         # Check if can be deleted
         can_delete, reason = self.can_be_deleted()
         if not can_delete:
-            raise ValidationError(reason)
+            logger.warning(f"Cannot delete {self._meta.verbose_name} {self.pk}: {reason}")
+            raise ValidationError(_(f"Cannot delete {self._meta.verbose_name}: {reason}"))
 
     def delete(self, *args, **kwargs):
         """Soft delete: mark as deleted and update related objects."""
@@ -135,6 +143,8 @@ class CommonModel(models.Model):
                     setattr(self, rel.get_accessor_name(), None)
                     self.save(update_fields=[rel.get_accessor_name().split('_')[0]])
 
+        logger.info(f"{self._meta.verbose_name} deleted: {self}")
+
     def hard_delete(self, *args, **kwargs):
         self._check_can_be_deleted_or_raise_error()
         return super().delete(*args, **kwargs)
@@ -144,7 +154,7 @@ class CommonModel(models.Model):
         self.is_deleted = False
         self.is_active = True
         self.date_deleted = None
-        self.save()
+        self.save(update_fields=["is_deleted", "is_active", "date_deleted"])
 
         # ADD: Auto-restore related CASCADE objects
         for rel in self._meta.related_objects:
@@ -206,6 +216,38 @@ class AddressBaseModel(CommonModel):
             models.Index(fields=["country", "state", "city", "is_deleted"]),  # Full location queries
 
         ]
+        constraints = [
+            # Ensure at least one of street or address_line_1 is provided
+            models.CheckConstraint(
+                check=(
+                        models.Q(street__isnull=False) |
+                        models.Q(address_line_1__isnull=False)
+                ),
+                name='%(app_label)s_%(class)s_require_street_or_address_line',
+                violation_error_message=_('Either street or address line 1 is required.')
+            ),
+            # Ensure city is provided
+            models.CheckConstraint(
+                check=models.Q(city__isnull=False) & ~models.Q(city=''),
+                name='%(app_label)s_%(class)s_require_city',
+                violation_error_message=_('City is required.')
+            ),
+            # Ensure country is provided
+            models.CheckConstraint(
+                check=models.Q(country__isnull=False) & ~models.Q(country=''),
+                name='%(app_label)s_%(class)s_require_country',
+                violation_error_message=_('Country is required.')
+            ),
+            # Ensure zip_code is valid if provided
+            models.CheckConstraint(
+                check=(
+                        models.Q(zip_code__isnull=True) |
+                        (models.Q(zip_code__isnull=False) & ~models.Q(zip_code=''))
+                ),
+                name='%(app_label)s_%(class)s_valid_zip_code',
+                violation_error_message=_('ZIP code must be non-empty if provided.')
+            )
+        ]
 
     @property
     def full_address(self):
@@ -217,6 +259,108 @@ class AddressBaseModel(CommonModel):
             self.country.name if self.country else None
         ]
         return ", ".join(filter(None, components))
+
+    def is_valid(self, *args, **kwargs) -> bool:
+        """
+        Check if the address is valid according to business rules.
+
+        Validates:
+        1. Parent class validation (is_active, is_deleted, etc.)
+        2. Either street or address_line_1 is provided
+        3. City is provided and not empty
+        4. Country is provided and not empty
+        5. ZIP code is valid if provided
+        6. State is valid if provided
+
+        Returns:
+            bool: True if the address is valid, False otherwise
+        """
+        # Check parent class validation
+        if not super().is_valid():
+            logger.warning(f"{self.__class__.__name__} validation failed: Parent class validation failed")
+            return False
+
+        # Check required fields
+        required_fields = {
+            'city': self.city,
+            'country': self.country
+        }
+
+        for field, value in required_fields.items():
+            if not value:
+                logger.warning(f"{self.__class__.__name__} validation failed: Missing required field {field}")
+                return False
+
+        # Check at least one of street or address_line_1 is provided
+        if not (self.street or self.address_line_1):
+            logger.warning(f"{self.__class__.__name__} validation failed: Either street or address_line_1 is required")
+            return False
+
+        # Check zip_code is not empty if provided
+        if self.zip_code is not None and not self.zip_code.strip():
+            logger.warning(f"{self.__class__.__name__} validation failed: ZIP code cannot be empty if provided")
+            return False
+
+        # Check state is valid if country requires it
+        if hasattr(self, 'country') and self.country and not self._is_valid_state():
+            logger.warning(f"{self.__class__.__name__} validation failed: Invalid state for country {self.country}")
+            return False
+
+        return True
+
+    def _is_valid_state(self) -> bool:
+        """
+        Check if the state is valid for the selected country.
+
+        Returns:
+            bool: True if state is valid or not required, False otherwise
+        """
+        # Skip validation if state is not required or not provided
+        if not self.state or not self.country:
+            return True
+
+        # Add country-specific state validation here if needed
+        # Example:
+        # if self.country == 'US' and self.state not in US_STATES:
+        #     return False
+
+        return True
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if the address can be safely deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+                - can_delete: True if the address can be deleted, False otherwise
+                - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
+        """
+        # Check parent class constraints
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            return False, reason
+
+        # Check if address is used in any orders
+        if hasattr(self, 'orders') and self.orders.exists():
+            return False, "Cannot delete address that is used in orders"
+
+        # Check if address is a default shipping/billing address
+        if hasattr(self, 'is_default') and self.is_default:
+            return False, "Cannot delete default address. Set another address as default first."
+
+        return True, ""
+
+    def clean(self):
+        """Run model validation before saving."""
+        super().clean()
+
+        # Normalize fields
+        if self.city:
+            self.city = self.city.strip()
+        if self.state:
+            self.state = self.state.strip()
+        if self.zip_code:
+            self.zip_code = self.zip_code.strip()
 
 
 class ItemCommonModel(CommonModel):
@@ -521,9 +665,6 @@ class ItemCommonModel(CommonModel):
         quantity = Decimal(str(self.quantity))
         self.total_price = price * quantity
 
-        # Run validation
-        self.clean()
-
         super().save(*args, **kwargs)
 
 
@@ -623,11 +764,11 @@ class SlugFieldCommonModel(CommonModel):
 
     def save(self, *args, **kwargs):
         is_new = self.pk is None
-        super().save(*args, **kwargs)
         if is_new or not self.slug:
             # Customize fields used to generate slug per model
             fields_to_slugify = getattr(self, "slug_fields", ["slug"])
             self._generate_and_set_slug(fields_to_slugify)
+        super().save(*args, **kwargs)
 
 
 class ShippingAddress(AddressBaseModel):
@@ -646,7 +787,7 @@ class ShippingAddress(AddressBaseModel):
 
     class Meta:
         db_table = "shipping_addresses"
-        verbose_name = "Shipping AddressBaseModel"
+        verbose_name = "Shipping Address"
         verbose_name_plural = "Shipping Addresses"
         ordering = ["-is_default", "-date_created"]  # Default addresses first, then newest
         indexes = AddressBaseModel.Meta.indexes + [
@@ -660,23 +801,82 @@ class ShippingAddress(AddressBaseModel):
             # Default address quick lookup
             models.Index(fields=["is_default", "is_deleted"]),  # All default addresses
         ]
-        constraints = [
-            # Ensure only one default address per user
+        constraints = AddressBaseModel.Meta.constraints + [
+            # Ensure phone number is valid if provided
+            models.CheckConstraint(
+                check=(
+                        models.Q(phone__isnull=True) |
+                        models.Q(phone__regex=r'^\+?[0-9\s-]{5,20}$')
+                ),
+                name='%(app_label)s_%(class)s_valid_phone',
+                violation_error_message=_('Enter a valid phone number.')
+            ),
+            # Ensure at least one contact method is provided
+            models.CheckConstraint(
+                check=(
+                        models.Q(phone__isnull=False) |
+                        models.Q(email__isnull=False)
+                ),
+                name='%(app_label)s_%(class)s_require_contact',
+                violation_error_message=_('At least one contact method (phone or email) is required.')
+            ),
+            # Prevent duplicate default addresses per user
             models.UniqueConstraint(
                 fields=['user'],
                 condition=models.Q(is_default=True, is_deleted=False),
-                name='unique_default_shipping_address'
+                name='%(app_label)s_%(class)s_single_default',
+                violation_error_message=_('User can only have one default shipping address.')
             )
         ]
 
     def can_be_deleted(self) -> tuple[bool, str]:
-        from orders.models import Order
-        active_orders_with_address = Order.objects.filter(user=self.user, shipping_address=self)
+        """
+        Check if the shipping address can be safely deleted.
 
-        if active_orders_with_address.exists():
-            return False, _("This address is currently in use in active orders and cannot be deleted.")
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+                - can_delete: True if the address can be deleted, False otherwise
+                - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
+        """
+        # Check parent class constraints
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            return False, reason
+
+        # Check if this is the only shipping address
+        if hasattr(self, 'user') and self.user.shipping_addresses.count() <= 1:
+            return False, "Cannot delete the only shipping address"
+
+        # Check if this is the default address and there are other addresses
+        if self.is_default and hasattr(self, 'user'):
+            other_addresses = self.user.shipping_addresses.exclude(pk=self.pk).exists()
+            if not other_addresses:
+                return False, "Cannot delete the only shipping address"
+            if not self.user.shipping_addresses.filter(is_default=True).exclude(pk=self.pk).exists():
+                return False, "Set another address as default before deleting this one"
+
+        # Check if this address is used in any orders
+        if hasattr(self, 'orders') and self.orders.exists():
+            return False, "Cannot delete shipping address used in orders"
+
+        # Check if this address is used in any shipments
+        if hasattr(self, 'shipments') and self.shipments.exists():
+            return False, "Cannot delete shipping address used in shipments"
 
         return True, ""
+
+    def save(self, *args, **kwargs):
+        """Override save to handle default address logic."""
+        # If this is being set as default, unset other defaults
+        if self.is_default and hasattr(self, 'user'):
+            self.user.shipping_addresses.exclude(pk=self.pk).update(is_default=False)
+
+        # If this is the first address, make it default
+        if hasattr(self, 'user') and not self.user.shipping_addresses.exists():
+            self.is_default = True
+
+        super().save(*args, **kwargs)
+        logger.info(f"ShippingAddress {self.pk} saved for user {getattr(self, 'user_id', 'unknown')}")
 
 
 class BillingAddress(AddressBaseModel):
@@ -716,7 +916,7 @@ class BillingAddress(AddressBaseModel):
 
     class Meta:
         db_table = "billing_addresses"
-        verbose_name = "Billing AddressBaseModel"
+        verbose_name = "Billing Address"
         verbose_name_plural = "Billing Addresses"
         ordering = ["-is_default", "-date_created"]
         indexes = AddressBaseModel.Meta.indexes + [
@@ -730,10 +930,144 @@ class BillingAddress(AddressBaseModel):
             models.Index(fields=["company_name", "is_deleted"]),
 
         ]
-        constraints = [
-            models.UniqueConstraint(
-                fields=['user'],
-                condition=models.Q(is_default=True, is_deleted=False),
-                name='unique_default_billing_address'
+        constraints = AddressBaseModel.Meta.constraints + [
+            # Ensure contact name is provided for non-business addresses
+            models.CheckConstraint(
+                check=(
+                        models.Q(is_business=True) |
+                        (models.Q(is_business=False) & models.Q(contact_name__isnull=False) & ~models.Q(
+                            contact_name=''))
+                ),
+                name='%(app_label)s_%(class)s_require_contact_name',
+                violation_error_message=_('Contact name is required for non-business addresses.')
+            ),
+            # Ensure email is provided and valid
+            models.CheckConstraint(
+                check=(
+                        models.Q(email__isnull=False) &
+                        ~models.Q(email='') &
+                        models.Q(email__contains='@')
+                ),
+                name='%(app_label)s_%(class)s_valid_email',
+                violation_error_message=_('A valid email address is required.')
+            ),
+            # Ensure tax_id is provided for business addresses
+            models.CheckConstraint(
+                check=(
+                        ~models.Q(is_business=True) |
+                        (models.Q(is_business=True) & models.Q(tax_id__isnull=False) & ~models.Q(tax_id=''))
+                ),
+                name='%(app_label)s_%(class)s_require_tax_id_for_business',
+                violation_error_message=_('Tax ID is required for business addresses.')
             )
         ]
+
+    def is_valid(self, *args, **kwargs) -> bool:
+        """
+        Check if the billing address is valid according to business rules.
+
+        Validates:
+        1. Parent class validation (address fields, etc.)
+        2. Contact name is provided for non-business addresses
+        3. Email is valid
+        4. Tax ID is provided for business addresses
+        5. Phone number is valid if provided
+
+        Returns:
+            bool: True if the billing address is valid, False otherwise
+        """
+        # Check parent class validation
+        if not super().is_valid():
+            logger.warning(f"BillingAddress validation failed: Parent class validation failed")
+            return False
+
+        # Check required fields
+        required_fields = {
+            'email': self.email,
+            'contact_name': None if self.is_business else self.contact_name,
+            'tax_id': self.tax_id if self.is_business else None
+        }
+
+        for field, value in required_fields.items():
+            if value is not None and not value:
+                logger.warning(f"BillingAddress validation failed: Missing required field {field}")
+                return False
+
+        # Validate email format
+        if self.email and '@' not in self.email:
+            logger.warning("BillingAddress validation failed: Invalid email format")
+            return False
+
+        # Validate phone number if provided
+        if self.phone:
+            try:
+                parsed_phone = str(self.phone)
+                if len(parsed_phone) < 5:  # Basic validation
+                    logger.warning("BillingAddress validation failed: Invalid phone number")
+                    return False
+            except Exception as e:
+                logger.warning(f"BillingAddress validation failed: {str(e)}")
+                return False
+
+        return True
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if the billing address can be safely deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+                - can_delete: True if the address can be deleted, False otherwise
+                - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
+        """
+        # Check parent class constraints
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            return False, reason
+
+        # Check if this is the only billing address
+        if hasattr(self, 'user') and self.user.billing_addresses.count() <= 1:
+            return False, "Cannot delete the only billing address"
+
+        # Check if this is the default address and there are other addresses
+        if self.is_default and hasattr(self, 'user'):
+            other_addresses = self.user.billing_addresses.exclude(pk=self.pk).exists()
+            if other_addresses:
+                return False, "Set another address as default before deleting this one"
+
+        # Check if this address is used in any orders
+        if hasattr(self, 'orders') and self.orders.exists():
+            return False, "Cannot delete billing address used in orders"
+
+        return True, ""
+
+    def clean(self):
+        """Run model validation before saving."""
+        super().clean()
+
+        # Normalize fields
+        if self.company_name:
+            self.company_name = self.company_name.strip()
+        if self.contact_name:
+            self.contact_name = self.contact_name.strip()
+        if self.tax_id:
+            self.tax_id = self.tax_id.strip().upper()  # Normalize tax ID to uppercase
+        if self.email:
+            self.email = self.email.lower().strip()
+
+        # If this is a business address, ensure company name is set
+        if self.is_business and not self.company_name:
+            self.company_name = self.contact_name or ""
+
+        # If this is the only address, make it default
+        if hasattr(self, 'user') and not self.user.billing_addresses.exists():
+            self.is_default = True
+
+    def save(self, *args, **kwargs):
+        """Override save to handle default address logic."""
+        # If this is being set as default, unset other defaults
+        if self.is_default and hasattr(self, 'user'):
+            self.user.billing_addresses.exclude(pk=self.pk).update(is_default=False)
+
+        super().save(*args, **kwargs)
+        logger.info(f"BillingAddress {self.pk} saved for user {self.user_id}")

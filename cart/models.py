@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 
 from django.conf import settings
@@ -12,6 +13,8 @@ from rest_framework.exceptions import ValidationError
 from .managers import CartManager, CouponManager, CartItemManager, SavedCartManager
 from common.models import CommonModel, ItemCommonModel
 from .enums import CART_STATUSES
+
+logger = logging.getLogger(__name__)
 
 
 class Coupon(CommonModel):
@@ -80,7 +83,6 @@ class Coupon(CommonModel):
 
             # For reporting and analytics
             models.Index(fields=["used_count", "usage_limit"]),
-            models.Index(fields=["date_created", "is_deleted"]),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -128,9 +130,12 @@ class Coupon(CommonModel):
 
     def can_be_deleted(self) -> tuple[bool, str]:
         """Check if coupon can be safely deleted"""
+        if not super().can_be_deleted()[0]:
+            return False, super().can_be_deleted()[1]
+
         if self.used_count > 0:
             return False, _("Cannot delete coupon that has been used")
-        return super().can_be_deleted()
+        return True, ""
 
     def increment_usage(self, commit=True):
         """Increment the usage count of the coupon"""
@@ -143,14 +148,18 @@ class Coupon(CommonModel):
         if not super().is_valid():
             return False
         if not self.product or not self.product.is_active or self.product.is_deleted:
+            logger.debug(f"Product for this product is {self.product or "None"} and Active: {self.product.is_active} \
+                            Deleted: {self.product.is_deleted}")
             return False
         if cart_total is not None and cart_total < self.minimum_amount:
+            logger.debug(f"Coupon validation failed: cart_total ({cart_total}) is less \ "
+                         f"than minimum_amount ({self.minimum_amount})")
             return False
         return True
 
     def apply_discount(self, amount: Decimal) -> Decimal:
         """Apply coupon discount to amount"""
-        if not self.is_valid(amount):
+        if not self.is_valid(float(amount)):
             raise ValidationError(_("Coupon is not valid for this amount"))
         discount = (amount * Decimal(self.discount_amount / 100)).quantize(Decimal('0.01'))
         return max(amount - discount, Decimal('0.00'))
@@ -185,19 +194,46 @@ class Cart(CommonModel):
 
     def can_be_deleted(self):
         """Check if cart can be safely soft-deleted."""
-        if self.status == CART_STATUSES.ACTIVE:
-            return False  # Active carts shouldn't be deleted
-        if self.cart_items.filter(is_deleted=False).exists():
-            return False  # Carts with items shouldn't be deleted
-        return True
+        if not super().can_be_deleted()[0]:
+            return False, super().can_be_deleted()[1]
 
-    def delete(self, *args, **kwargs):
-        """Override delete to handle cart deletion logic."""
-        if not self.can_be_deleted():
-            raise ValidationError(
-                _("Cannot delete active cart or cart with items. Please clear cart first.")
-            )
-        super().delete(*args, **kwargs)
+        if self.status == CART_STATUSES.ACTIVE:
+            return False,  "Active carts shouldn't be deleted"
+        if self.cart_items.filter(is_deleted=False).exists():
+            return False,  "Carts with items shouldn't be deleted"
+        return True, ""
+
+    def is_valid(self, *args, **kwargs) -> bool:
+        """
+        Check if the cart is valid by verifying:
+        1. Parent class validation (is_active, is_deleted, etc.)
+        2. Cart status is valid
+        3. All cart items are valid
+        4. If a coupon is applied, it's still valid
+        """
+        # Check parent class validation
+        if not super().is_valid():
+            return False
+        
+        # Check if cart status is valid
+        if self.status not in dict(CART_STATUSES.choices):
+            return False
+        
+        # Check if all cart items are valid
+        if not self.cart_items.filter(is_deleted=False).exists():
+            return False
+        
+        # Check each cart item's validity
+        for item in self.cart_items.filter(is_deleted=False):
+            if not item.is_valid():
+                return False
+        
+        # If there's a coupon, validate it
+        if self.coupon:
+            if not self.coupon.is_valid(self.get_cart_total()):
+                return False
+        
+        return True
 
     def get_cart_total(self):
         cart_items = self.cart_items.all()
@@ -259,6 +295,78 @@ class CartItem(ItemCommonModel):
         if self.cart.status != CART_STATUSES.ACTIVE:
             raise ValidationError(_("Cannot add items to inactive cart"))
 
+    def is_valid(self, *args, **kwargs) -> bool:
+        """Check if the cart item is valid by verifying:
+        1. Parent class validation (is_active, is_deleted, etc.)
+        2. Cart is valid and active
+        3. Product is valid and available
+        4. Quantity is valid
+        5. Variant (if any) is valid
+
+        Returns:
+            bool: True if the cart item is valid, False otherwise.
+        """
+        # Check parent class validation
+        if not super().is_valid():
+            return False
+
+        # Check if cart is valid
+        if not hasattr(self, 'cart') or not self.cart or self.cart.is_deleted:
+            return False
+            
+        # Check if cart is active
+        if self.cart.status != CART_STATUSES.ACTIVE:
+            return False
+            
+        # Check if product exists and is valid
+        if not self.product or not self.product.is_valid():
+            return False
+            
+        # Check if variant exists and is valid (if specified)
+        if hasattr(self, 'variant') and self.variant and \
+           (not hasattr(self.variant, 'is_valid') or not self.variant.is_valid()):
+            return False
+            
+        # Check if quantity is valid
+        if self.quantity < 1:
+            return False
+            
+        # Check if product is in stock
+        if hasattr(self.product, 'is_in_stock') and not self.product.is_in_stock():
+            return False
+            
+        # Check if variant is in stock (if specified)
+        if hasattr(self, 'variant') and self.variant and \
+           hasattr(self.variant, 'is_in_stock') and not self.variant.is_in_stock():
+            return False
+            
+        return True
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """Check if cart item can be safely soft-deleted.
+        
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        # Check parent class validation
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            return False, reason
+            
+        # Check if cart exists and is valid
+        if not hasattr(self, 'cart') or not self.cart:
+            return True, ""
+            
+        # Check if cart is in a state that allows item deletion
+        if self.cart.status != CART_STATUSES.ACTIVE:
+            return False, "Cannot delete items from an inactive cart"
+            
+        # Check if there are any associated orders that prevent deletion
+        if hasattr(self, 'order_items') and hasattr(self.order_items, 'exists') and self.order_items.exists():
+            return False, "Cannot delete cart item associated with an order"
+            
+        return True, ""
+
 
 class SavedCart(CommonModel):
     """
@@ -315,16 +423,23 @@ class SavedCart(CommonModel):
         constraints = [
             # Ensure only one default cart per user
             models.UniqueConstraint(
-                fields=['user', 'is_default'],
+                fields=['user'],
                 condition=models.Q(is_default=True, is_deleted=False),
-                name='unique_default_cart_per_active_user'
+                name='unique_default_saved_cart_per_user',
+                violation_error_message=_('User can only have one default saved cart.')
             ),
-            # Ensure cart names are unique per user
-            models.UniqueConstraint(
-                fields=['user', 'name'],
-                condition=models.Q(is_deleted=False),
-                name='unique_cart_name_per_active_user'
+            # Ensure cart data is not empty
+            models.CheckConstraint(
+                check=models.Q(cart_data__gt={}),
+                name='saved_cart_data_not_empty',
+                violation_error_message=_('Cart data cannot be empty.')
             ),
+            # Ensure name is provided if not default
+            models.CheckConstraint(
+                check=models.Q(is_default=True) | ~models.Q(name=''),
+                name='saved_cart_name_required',
+                violation_error_message=_('Name is required for non-default saved carts.')
+            )
         ]
         indexes = [
             # User-specific queries
@@ -343,33 +458,124 @@ class SavedCart(CommonModel):
     def __str__(self):
         return f"{self.user.email} - {self.name}"
 
-    def clean(self):
-        """Validate model constraints before saving."""
-        from django.core.exceptions import ValidationError
+    def is_valid(self) -> bool:
+        """
+        Check if the saved cart is valid.
 
-        if self.is_default and SavedCart.objects.filter(
-                user=self.user,
-                is_default=True,
-                is_deleted=False
-        ).exclude(pk=self.pk).exists():
-            raise ValidationError(_('User can only have one default saved cart.'))
+        Returns:
+            bool: True if the saved cart is valid, False otherwise
+        """
+        if not super().is_valid():
+            logger.warning(f"SavedCart {self.pk} validation failed: Parent validation failed")
+            return False
+
+        # Check required fields
+        required_fields = {
+            'user': self.user_id,
+            'cart_data': self.cart_data,
+        }
+
+        for field, value in required_fields.items():
+            if not value:
+                logger.warning(f"SavedCart {self.pk} validation failed: Missing required field {field}")
+                return False
+
+        # Validate cart_data structure
+        if not isinstance(self.cart_data, dict):
+            logger.warning(f"SavedCart {self.pk} validation failed: cart_data must be a dictionary")
+            return False
+
+        # If this is not the default cart, name is required
+        if not self.is_default and not self.name:
+            logger.warning(f"SavedCart {self.pk} validation failed: Name is required for non-default saved carts")
+            return False
+
+        # Validate items in cart_data
+        if 'items' in self.cart_data:
+            if not isinstance(self.cart_data['items'], list):
+                logger.warning(f"SavedCart {self.pk} validation failed: cart_data.items must be a list")
+                return False
+
+            # Validate each item in the cart
+            for item in self.cart_data.get('items', []):
+                if not all(key in item for key in ['product_id', 'quantity']):
+                    logger.warning(f"SavedCart {self.pk} validation failed: Invalid item format in cart_data")
+                    return False
+
+                try:
+                    quantity = int(item['quantity'])
+                    if quantity <= 0:
+                        logger.warning(f"SavedCart {self.pk} validation failed: Invalid quantity in cart item")
+                        return False
+                except (ValueError, TypeError):
+                    logger.warning(f"SavedCart {self.pk} validation failed: Invalid quantity type in cart item")
+                    return False
+
+        logger.debug(f"SavedCart {self.pk} validation successful")
+        return True
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if the saved cart can be safely deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+                - can_delete: True if the cart can be deleted, False otherwise
+                - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
+        """
+        # Check parent class constraints
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            return False, reason
+
+        # Check if this is the default cart
+        if self.is_default:
+            return False, "Cannot delete the default saved cart. Set another cart as default first."
+
+        # Check if this cart is being used in any active orders
+        if hasattr(self, 'orders') and self.orders.filter(is_deleted=False).exists():
+            return False, "Cannot delete a saved cart that is associated with orders"
+
+        return True, ""
+
+    def clean(self):
+        """Run model validation before saving."""
+        super().clean()
+
+        # Normalize name
+        if self.name:
+            self.name = self.name.strip()
+
+        # Set default name if not provided and not default cart
+        if not self.name and not self.is_default:
+            self.name = f"Saved Cart {timezone.now().strftime('%Y-%m-%d %H:%M')}"
 
     def save(self, *args, **kwargs):
         """Override save to handle default cart logic."""
-        self.full_clean()
+        # If this is being set as default, unset other defaults
+        if self.is_default and hasattr(self, 'user'):
+            self.user.saved_carts.filter(is_default=True).exclude(pk=self.pk).update(is_default=False)
+
+        # If this is the first cart, make it default
+        if hasattr(self, 'user') and not self.user.saved_carts.exists():
+            self.is_default = True
+
         super().save(*args, **kwargs)
+        logger.info(f"SavedCart {self.pk} saved for user {self.user_id}")
 
     @property
-    def total_items(self):
-        """Total number of items in the saved cart."""
-        return self.items.aggregate(
-            total=models.Sum('quantity')
-        )['total'] or 0
+    def item_count(self) -> int:
+        """Return the total number of items in the cart."""
+        if not isinstance(self.cart_data, dict) or 'items' not in self.cart_data:
+            return 0
+        return len(self.cart_data['items'])
 
     @property
-    def total_price(self):
-        """Calculate total price of all items in the saved cart."""
-        return sum(item.total_price for item in self.items.all())
+    def total_quantity(self) -> int:
+        """Return the total quantity of all items in the cart."""
+        if not isinstance(self.cart_data, dict) or 'items' not in self.cart_data:
+            return 0
+        return sum(item.get('quantity', 0) for item in self.cart_data['items'])
 
     def restore_to_cart(self, user):
         """Restore this saved cart to an active cart for the user."""
@@ -382,7 +588,7 @@ class SavedCart(CommonModel):
         )
 
         # Clear existing cart items
-        cart.items.all().delete()
+        cart.cart_items.all().delete()
 
         # Copy saved cart items to active cart
         for saved_item in self.items.all():

@@ -300,7 +300,11 @@ class Payment(CommonModel):
             raise ValidationError({"invoice": _("Cannot create payment for non-existent or deleted invoice.")})
 
     def generate_payment_reference(self):
-        return f"PAY-{self.uuid}"
+        """Generate unique payment reference."""
+        import random
+        import string
+        return f"PAY-{timezone.now().strftime('%Y%m%d')}- \
+                {''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}"
 
     def process_payment(self, payment_data: dict) -> bool:
         """
@@ -313,10 +317,8 @@ class Payment(CommonModel):
             bool: True if payment was successful, False otherwise
         """
         try:
-            # Add payment processing logic here
-            self.status = PaymentStatus.COMPLETED
-            self.confirmed_at = timezone.now()
-            self.save()
+            # TODO: Add payment processing logic
+            self.mark_completed()
             return True
         except Exception as e:
             self.status = PaymentStatus.FAILED
@@ -353,7 +355,8 @@ class Payment(CommonModel):
         )
         refund.mark_completed()
 
-        self.mark_refunded()
+        # TODO: Add payment_data for payment processing
+        self.process_payment(payment_data={})
 
         return refund
 

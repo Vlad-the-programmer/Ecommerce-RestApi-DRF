@@ -289,22 +289,6 @@ class Refund(CommonModel):
 
         super().save(*args, **kwargs)
 
-    def delete(self, *args, **kwargs):
-        """Override delete to handle status change and prevent deletion of completed refunds."""
-        if self.is_completed:
-            raise ValidationError(_("Cannot delete a completed refund."))
-
-        if self.amount_refunded > 0:
-            raise ValidationError(_("Cannot delete a refund with processed payments."))
-
-        # Update status to CANCELLED if not already
-        if self.status != RefundStatus.CANCELLED:
-            self.status = RefundStatus.CANCELLED
-            self.save(update_fields=['status', 'date_updated'])
-
-        # Proceed with soft delete
-        super().delete(*args, **kwargs)
-
     def can_be_deleted(self) -> tuple[bool, str]:
         """Check if refund can be safely soft-deleted."""
         if not super().can_be_deleted()[0]:
@@ -314,6 +298,9 @@ class Refund(CommonModel):
             return False, "Completed refunds should never be deleted"
         if self.amount_refunded > 0:
             return False, "Refunds with actual money movement can't be deleted"
+        if self.status != RefundStatus.CANCELLED:
+            self.status = RefundStatus.CANCELLED
+            return False, "Refund must be cancelled before deletion"
         return True, ""
 
     def generate_refund_number(self):
@@ -412,6 +399,17 @@ class Refund(CommonModel):
             update_fields.append("internal_notes")
 
         self.save(update_fields=update_fields)
+
+    def cancel(self):
+        """Cancel the refund request."""
+        if self.status != RefundStatus.PENDING:
+            raise ValidationError(_('Only pending refunds can be cancelled.'))
+
+        self._validate_status_transition(self.status, RefundStatus.CANCELLED)
+
+        self.status = RefundStatus.CANCELLED
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
 
 
 class RefundItem(CommonModel):
