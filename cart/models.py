@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime
 
 from django.conf import settings
 from django.db import models
@@ -217,20 +216,24 @@ class Cart(CommonModel):
         
         # Check if cart status is valid
         if self.status not in dict(CART_STATUSES.choices):
+            logger.debug(f"Cart validation failed: status ({self.status}) is not valid")
             return False
         
         # Check if all cart items are valid
         if not self.cart_items.filter(is_deleted=False).exists():
+            logger.debug(f"Cart validation failed: cart items don't exist")
             return False
         
         # Check each cart item's validity
         for item in self.cart_items.filter(is_deleted=False):
             if not item.is_valid():
+                logger.debug(f"Cart validation failed: cart item ({item.id}) is not valid")
                 return False
         
         # If there's a coupon, validate it
         if self.coupon:
             if not self.coupon.is_valid(self.get_cart_total()):
+                logger.debug(f"Cart validation failed: coupon ({self.coupon.id}) is not valid")
                 return False
         
         return True
@@ -312,32 +315,42 @@ class CartItem(ItemCommonModel):
 
         # Check if cart is valid
         if not hasattr(self, 'cart') or not self.cart or self.cart.is_deleted:
+            logger.debug(f"Cart items validation failed. Cart is deleted: \
+                            {self.cart.is_deleted if self.cart and hasattr(self, 'cart')  else None} \
+                            Cart is None: {self.cart is None} \
+                            Cart has attribute 'cart': {hasattr(self, 'cart')}")
             return False
             
         # Check if cart is active
         if self.cart.status != CART_STATUSES.ACTIVE:
+            logger.debug(f"Cart items validation failed. Cart status: {self.cart.status}")
             return False
             
         # Check if product exists and is valid
         if not self.product or not self.product.is_valid():
+            logger.debug(f"Cart items validation failed. Product is valid: {self.product.is_valid()}")
             return False
             
         # Check if variant exists and is valid (if specified)
         if hasattr(self, 'variant') and self.variant and \
            (not hasattr(self.variant, 'is_valid') or not self.variant.is_valid()):
+            logger.debug(f"Cart items validation failed. Variant is valid: {self.variant.is_valid()}")
             return False
             
         # Check if quantity is valid
         if self.quantity < 1:
+            logger.debug(f"Cart items validation failed. Quantity is valid: {self.quantity < 1}")
             return False
             
         # Check if product is in stock
         if hasattr(self.product, 'is_in_stock') and not self.product.is_in_stock():
+            logger.debug(f"Cart items validation failed. Product is in stock: {self.product.is_in_stock()}")
             return False
             
         # Check if variant is in stock (if specified)
         if hasattr(self, 'variant') and self.variant and \
            hasattr(self.variant, 'is_in_stock') and not self.variant.is_in_stock():
+            logger.debug(f"Cart items validation failed. Variant is in stock: {self.variant.is_in_stock()}")
             return False
             
         return True
@@ -472,7 +485,7 @@ class SavedCart(CommonModel):
         # Check required fields
         required_fields = {
             'user': self.user_id,
-            'cart_data': self.cart_data,
+            'original_cart': self.original_cart,
         }
 
         for field, value in required_fields.items():
@@ -480,36 +493,15 @@ class SavedCart(CommonModel):
                 logger.warning(f"SavedCart {self.pk} validation failed: Missing required field {field}")
                 return False
 
-        # Validate cart_data structure
-        if not isinstance(self.cart_data, dict):
-            logger.warning(f"SavedCart {self.pk} validation failed: cart_data must be a dictionary")
-            return False
-
         # If this is not the default cart, name is required
         if not self.is_default and not self.name:
             logger.warning(f"SavedCart {self.pk} validation failed: Name is required for non-default saved carts")
             return False
 
-        # Validate items in cart_data
-        if 'items' in self.cart_data:
-            if not isinstance(self.cart_data['items'], list):
-                logger.warning(f"SavedCart {self.pk} validation failed: cart_data.items must be a list")
-                return False
-
-            # Validate each item in the cart
-            for item in self.cart_data.get('items', []):
-                if not all(key in item for key in ['product_id', 'quantity']):
-                    logger.warning(f"SavedCart {self.pk} validation failed: Invalid item format in cart_data")
-                    return False
-
-                try:
-                    quantity = int(item['quantity'])
-                    if quantity <= 0:
-                        logger.warning(f"SavedCart {self.pk} validation failed: Invalid quantity in cart item")
-                        return False
-                except (ValueError, TypeError):
-                    logger.warning(f"SavedCart {self.pk} validation failed: Invalid quantity type in cart item")
-                    return False
+        # Validate original cart
+        if not self.original_cart or not self.original_cart.is_valid():
+            logger.warning(f"SavedCart {self.pk} validation failed: Original cart is required")
+            return False
 
         logger.debug(f"SavedCart {self.pk} validation successful")
         return True
@@ -599,6 +591,7 @@ class SavedCart(CommonModel):
                 price=saved_item.price
             )
 
+        logger.info(f"SavedCart {self.pk} restored to active cart for user {user.pk}")
         return cart
 
 
@@ -668,7 +661,7 @@ class SavedCartItem(CommonModel):
         ]
 
     def __str__(self):
-        return f"{self.product.name} x {self.quantity} in {self.saved_cart.name}"
+        return f"{self.product.product_name} x {self.quantity} in {self.saved_cart.name}"
 
     @property
     def total_price(self):
@@ -679,11 +672,12 @@ class SavedCartItem(CommonModel):
         """Override save to capture product snapshot."""
         if not self.product_snapshot and self.product:
             self.product_snapshot = {
-                'name': self.product.name,
+                'name': self.product.product_name,
                 'sku': self.product.sku,
-                'regular_price': str(self.product.regular_price),
-                'sale_price': str(self.product.sale_price) if self.product.sale_price else None,
-                'image_url': self.product.get_primary_image_url(),
+                'regular_price': str(self.product.price),
+                'sale_price': str(self.product.compare_at_price) if self.product.compare_at_price else None,
+                'image_urls': [img.imageURL for img in self.product.product_images.all()
+                                            if self.product.product_images.exists() and hasattr(img, 'imageURL')],
                 'category': self.product.category.name if self.product.category else None,
             }
         super().save(*args, **kwargs)

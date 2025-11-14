@@ -95,8 +95,9 @@ class CommonModel(models.Model):
         # Check if can be deleted
         can_delete, reason = self.can_be_deleted()
         if not can_delete:
-            logger.warning(f"Cannot delete {self._meta.verbose_name} {self.pk}: {reason}")
+            logger.warning(f"Cannot delete {self._meta.verbose_name} {self.id}: {reason}")
             raise ValidationError(_(f"Cannot delete {self._meta.verbose_name}: {reason}"))
+        logger.warning(f"{self._meta.verbose_name} {self.id} can be safely deleted")
 
     def delete(self, *args, **kwargs):
         """Soft delete: mark as deleted and update related objects."""
@@ -424,11 +425,10 @@ class ItemCommonModel(CommonModel):
 
         # Check for active orders with this variant
         from orders.models import OrderItem
+        from orders.enums import active_order_statuses
         if OrderItem.objects.filter(
                 variant=self,
-                order__status__in=[OrderStatuses.PENDING, OrderStatuses.APPROVED, OrderStatuses.SHIPPED,
-                                   OrderStatuses.PAID, OrderStatuses.UNPAID, OrderStatuses.COMPLETED,
-                                   OrderStatuses.DELIVERED]
+                order__status__in=active_order_statuses
         ).exists():
             return False, "Cannot delete variant with active or pending orders"
 

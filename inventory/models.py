@@ -1,3 +1,4 @@
+import datetime
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -8,6 +9,7 @@ from django.utils import timezone
 from common.models import CommonModel, AddressBaseModel
 from inventory.enums import WAREHOUSE_TYPE
 from inventory.managers import InventoryManager, WarehouseManager
+from shipping.models import ShippingClass
 
 
 class WarehouseProfile(AddressBaseModel):
@@ -183,26 +185,141 @@ class WarehouseProfile(AddressBaseModel):
     objects = WarehouseManager()
 
     def is_valid(self) -> bool:
-        """Check if warehouse is valid for operations.
+        """
+        Check if the warehouse is valid for operations with detailed validation.
 
         Returns:
-            bool: True if warehouse is valid for operations, False otherwise
+            bool: True if warehouse is valid for operations, False otherwise with detailed logging
         """
-        return (
-                super().is_valid() and
-                self.is_operational and
-                self.is_available_for_fulfillment and
-                not self.is_at_capacity
-        )
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Basic model validation
+        if not super().is_valid():
+            logger.warning(f"Warehouse {self.id} failed basic model validation")
+            return False
+
+        # Check required fields
+        required_fields = {
+            'name': bool(self.name and self.name.strip()),
+            'code': bool(self.code and self.code.strip()),
+            'country': bool(self.country),
+            'capacity': self.capacity is not None,
+            'warehouse_type': bool(self.warehouse_type)
+        }
+
+        missing_fields = [field for field, has_value in required_fields.items() if not has_value]
+        if missing_fields:
+            logger.warning(f"Warehouse {self.id} is missing required fields: {', '.join(missing_fields)}")
+            return False
+
+        # Check at least one contact method is provided
+        if not (self.contact_phone or self.contact_email):
+            logger.warning(f"Warehouse {self.id} must have at least one contact method (phone or email)")
+            return False
+
+        # Check capacity is positive
+        if not isinstance(self.capacity, (int, float, Decimal)) or self.capacity <= 0:
+            logger.warning(f"Warehouse {self.id} has invalid capacity: {self.capacity}")
+            return False
+
+        # Check utilization is valid
+        if not (0 <= self.current_utilization <= 100):
+            logger.warning(
+                f"Warehouse {self.id} has invalid utilization: {self.current_utilization}% "
+                "(must be between 0 and 100)"
+            )
+            return False
+
+        # Check SLA days is positive
+        if not isinstance(self.sla_days, int) or self.sla_days <= 0:
+            logger.warning(f"Warehouse {self.id} has invalid SLA days: {self.sla_days}")
+            return False
+
+        # Check max_order_per_day is positive
+        if not isinstance(self.max_order_per_day, int) or self.max_order_per_day <= 0:
+            logger.warning(f"Warehouse {self.id} has invalid max orders per day: {self.max_order_per_day}")
+            return False
+
+        # Check timezone is valid
+        try:
+            import pytz
+            pytz.timezone(self.timezone)
+        except (pytz.UnknownTimeZoneError, AttributeError):
+            logger.warning(f"Warehouse {self.id} has invalid timezone: {self.timezone}")
+            return False
+
+        # Check operational status constraints
+        if not self.is_operational and self.is_active_fulfillment:
+            logger.warning(
+                f"Warehouse {self.id} cannot be set for fulfillment when not operational"
+            )
+            return False
+
+        if not self.is_operational and self.manager_id:
+            logger.warning(
+                f"Warehouse {self.id} cannot have a manager when not operational"
+            )
+            return False
+
+        # Check main warehouse constraints
+        if self.warehouse_type == WAREHOUSE_TYPE.MAIN and not self.is_operational:
+            logger.warning(
+                f"Warehouse {self.id} is a main warehouse and must be operational"
+            )
+            return False
+
+        logger.debug(f"Warehouse {self.id} validation successful")
+        return True
 
     def can_be_deleted(self) -> tuple[bool, str]:
-        """Check if warehouse can be safely soft-deleted"""
-        if not super().can_be_deleted()[0]:
-            return False, super().can_be_deleted()[1]
+        """
+        Check if warehouse can be safely soft-deleted.
 
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Check parent class constraints
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            logger.warning(f"Warehouse {self.id} cannot be deleted: {reason}")
+            return can_delete, reason
+
+        # Check if warehouse is operational
         if self.is_operational:
-            return False, "Cannot delete operational warehouse"
+            message = "Cannot delete an operational warehouse"
+            logger.warning(f"{message} (Warehouse ID: {self.id})")
+            return False, message
 
+        # Check for active inventory
+        if hasattr(self, 'inventory_items') and self.inventory_items.filter(
+                quantity_available__gt=0
+        ).exists():
+            item_count = self.inventory_items.filter(quantity_available__gt=0).count()
+            message = f"Cannot delete warehouse with {item_count} inventory items in stock"
+            logger.warning(f"{message} (Warehouse ID: {self.id})")
+            return False, message
+
+        from orders.enums import active_order_statuses
+        # Check for pending orders
+        if hasattr(self, 'orders') and self.orders.filter(
+                status__in=active_order_statuses
+        ).exists():
+            order_count = self.orders.filter(
+                status__in=active_order_statuses
+            ).count()
+            message = f"Cannot delete warehouse with {order_count} active or pending orders"
+            logger.warning(f"{message} (Warehouse ID: {self.id})")
+            return False, message
+
+        # Check for active transfers
+        if self.has_active_orders:
+            message = f"Cannot delete warehouse with active orders"
+            logger.warning(f"{message} (Warehouse ID: {self.id})")
+            return False, message
         return True, ""
 
     def clean(self):
@@ -237,6 +354,12 @@ class WarehouseProfile(AddressBaseModel):
     def is_at_capacity(self):
         """Check if warehouse is at or near capacity"""
         return self.current_utilization >= 95
+
+    @property
+    def has_active_orders(self):
+        if WarehouseProfile.objects.get_active_orders(self.id).exists():
+            return True
+        return False
 
     def update_utilization(self, inventory_queryset=None):
         """Update current utilization based on inventory"""
@@ -385,43 +508,154 @@ class Inventory(CommonModel):
     objects = InventoryManager()
 
     def is_valid(self) -> bool:
-        """Check if inventory is valid for order fulfillment.
+        """Check if inventory is valid for order fulfillment with detailed validation.
 
         Returns:
-            bool: True if inventory is valid for fulfillment, False otherwise
+            bool: True if inventory is valid for fulfillment, False otherwise with detailed logging
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Basic model validation
         if not super().is_valid():
+            logger.warning(f"Inventory {self.id} failed basic model validation")
             return False
 
-        # Check if warehouse is valid
+        # Check required fields
+        required_fields = {
+            'product_variant_id': bool(self.product_variant_id),
+            'warehouse_id': bool(self.warehouse_id),
+            'quantity_available': self.quantity_available is not None,
+            'quantity_reserved': self.quantity_reserved is not None,
+            'reorder_level': self.reorder_level is not None
+        }
+        missing_fields = [field for field, has_value in required_fields.items() if not has_value]
+        if missing_fields:
+            logger.warning(f"Inventory {self.id} is missing required fields: {', '.join(missing_fields)}")
+            return False
+
+        # Check warehouse validity
+        if not hasattr(self, 'warehouse') or not self.warehouse:
+            logger.warning(f"Inventory {self.id} has no associated warehouse")
+            return False
+
         if not self.warehouse.is_valid():
+            logger.warning(f"Inventory {self.id} has invalid warehouse {self.warehouse_id}")
             return False
 
-        # Check if product variant is valid
+        # Check product variant validity
+        if not hasattr(self, 'product_variant') or not self.product_variant:
+            logger.warning(f"Inventory {self.id} has no associated product variant")
+            return False
+
         if not self.product_variant.is_valid():
+            logger.warning(f"Inventory {self.id} has invalid product variant {self.product_variant_id}")
             return False
 
-        # Check if inventory is not expired
+        # Check quantity constraints
+        if not isinstance(self.quantity_available, (int, float, Decimal)) or self.quantity_available < 0:
+            logger.warning(f"Inventory {self.id} has invalid available quantity: {self.quantity_available}")
+            return False
+
+        if not isinstance(self.quantity_reserved, (int, float, Decimal)) or self.quantity_reserved < 0:
+            logger.warning(f"Inventory {self.id} has invalid reserved quantity: {self.quantity_reserved}")
+            return False
+
+        if self.quantity_reserved > self.quantity_available:
+            logger.warning(
+                f"Inventory {self.id} has reserved quantity ({self.quantity_reserved}) "
+                f"greater than available quantity ({self.quantity_available})"
+            )
+            return False
+
+        # Check reorder level
+        if not isinstance(self.reorder_level, (int, float, Decimal)) or self.reorder_level < 0:
+            logger.warning(f"Inventory {self.id} has invalid reorder level: {self.reorder_level}")
+            return False
+
+        # Check cost-related fields
+        cost_fields = {
+            'cost_price': self.cost_price,
+            'manufacturing_cost_adjustment': self.manufacturing_cost_adjustment,
+            'packaging_cost_adjustment': self.packaging_cost_adjustment,
+            'shipping_cost_adjustment': self.shipping_cost_adjustment
+        }
+        for field, value in cost_fields.items():
+            if value is not None and (not isinstance(value, (int, float, Decimal)) or value < 0):
+                logger.warning(f"Inventory {self.id} has invalid {field}: {value}")
+                return False
+
+        # Check expiry date
+        if self.expiry_date and not isinstance(self.expiry_date, datetime.date):
+            logger.warning(f"Inventory {self.id} has invalid expiry date: {self.expiry_date}")
+            return False
+
+        # Check if inventory is expired
         if self.is_expired:
+            logger.warning(f"Inventory {self.id} has expired on {self.expiry_date}")
             return False
 
-        # Check if we have available stock
-        return self.quantity_available > 0
+        logger.debug(f"Inventory {self.id} validation successful")
+        return True
 
     def can_be_deleted(self) -> tuple[bool, str]:
-        """Check if inventory can be safely soft-deleted"""
-        if not super().can_be_deleted()[0]:
-            return False, super().can_be_deleted()[1]
+        """Check if inventory can be safely soft-deleted with detailed validation.
 
-        if self.product_variant:
-            can_be_deleted, reason = self.product_variant.can_be_deleted()
-            if not can_be_deleted:
-                return False, reason
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Check parent class constraints
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            logger.warning(f"Cannot delete inventory {self.id}: {reason}")
+            return False, reason
+
+        from orders.enums import active_order_statuses
+        # Check if there are any active orders for this inventory
+        if hasattr(self, 'order_items') and self.order_items.filter(
+                order__status__in=active_order_statuses,
+                order__is_deleted=False,
+                is_deleted=False
+        ).exists():
+            active_orders = self.order_items.filter(
+                order__status__in=active_order_statuses,
+                order__is_deleted=False
+            ).values_list('order__id', flat=True).distinct().count()
+            message = f"Cannot delete inventory with {active_orders} active orders"
+            logger.warning(f"{message} (Inventory ID: {self.id})")
+            return False, message
+
+        from orders.enums import active_order_statuses
+        # Check if there are any pending shippings with this inventory
+        active_shippings_with_active_orders = ShippingClass.objects.filter(
+                orders__status__in=active_order_statuses,
+                orders__is_active=True,
+                is_active=False,
+        )
+        if active_shippings_with_active_orders.exists():
+            for shipping in active_shippings_with_active_orders:
+                # If there are any active shippings with active orders which contain the inventory product
+                if shipping.orders.filter(
+                        order_items__product__product_variants__in=[self.product_variant],
+                        status__in=active_order_statuses,
+                        is_active=True,
+                        is_deleted=False
+                ).exists():
+
+                    message = f"Cannot delete inventory with active shippings and orders."
+                    logger.warning(f"{message} (Inventory ID: {self.id})")
+                    return False, message
 
         # Check if warehouse is operational (inverse logic - we can delete if warehouse is NOT operational)
         if self.warehouse and self.warehouse.is_operational:
-            return False, "Cannot delete inventory from operational warehouse"
+            message = "Cannot delete inventory from operational warehouse"
+            logger.warning(f"{message} (Inventory ID: {self.id}, Warehouse ID: {self.warehouse_id})")
+            return False, message
 
+        logger.info(f"Inventory {self.id} can be safely deleted")
         return True, ""
 
     @property

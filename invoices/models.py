@@ -165,69 +165,134 @@ class Invoice(CommonModel):
         Check if the invoice is valid according to business rules.
 
         Returns:
-            bool: True if invoice is valid, False otherwise
+            bool: True if invoice is valid, False otherwise with detailed logging
         """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Basic model validation
         if not super().is_valid():
+            logger.warning(f"Invoice {self.id} failed basic model validation")
             return False
 
         # Check required fields
-        required_fields = [
-            self.user_id,
-            self.invoice_number,
-            self.issue_date,
-            self.due_date,
-            self.total_amount is not None,
-            self.currency,
-            self.status
-        ]
-        if not all(required_fields):
+        required_fields = {
+            'user_id': self.user_id,
+            'invoice_number': self.invoice_number,
+            'issue_date': self.issue_date,
+            'due_date': self.due_date,
+            'total_amount': self.total_amount is not None,
+            'currency': self.currency,
+            'status': self.status
+        }
+
+        missing_fields = [field for field, has_value in required_fields.items() if not has_value]
+        if missing_fields:
+            logger.warning(f"Invoice {self.id} is missing required fields: {', '.join(missing_fields)}")
             return False
 
         # Check amount is non-negative
-        if self.total_amount < 0:
+        if not isinstance(self.total_amount, (int, float, Decimal)) or self.total_amount < 0:
+            logger.warning(f"Invoice {self.id} has invalid amount: {self.total_amount}")
+            return False
+
+        # Check date validity
+        if not isinstance(self.issue_date, (timezone.datetime, timezone.date)):
+            logger.warning(f"Invoice {self.id} has invalid issue date: {self.issue_date}")
+            return False
+
+        if not isinstance(self.due_date, (timezone.datetime, timezone.date)):
+            logger.warning(f"Invoice {self.id} has invalid due date: {self.due_date}")
             return False
 
         # Check due date is not before issue date
         if self.due_date < self.issue_date:
+            logger.warning(
+                f"Invoice {self.id} has due date ({self.due_date}) before issue date ({self.issue_date})"
+            )
             return False
 
         # Check invoice number format
-        if not (self.invoice_number.startswith('INV-') and len(self.invoice_number.split('-')) == 3):
+        if not (self.invoice_number and isinstance(self.invoice_number, str)):
+            logger.warning(f"Invoice {self.id} has invalid invoice number format")
             return False
 
         # Check currency format (3 uppercase letters)
-        if not (len(self.currency) == 3 and self.currency.isalpha() and self.currency.isupper()):
+        if not (isinstance(self.currency, str) and
+                len(self.currency) == 3 and
+                self.currency.isalpha() and
+                self.currency.isupper()):
+            logger.warning(f"Invoice {self.id} has invalid currency code: {self.currency}")
             return False
 
-        # Check status-specific rules
+        # Status-specific validations
         if self.status == InvoiceStatus.PAID and not self.is_fully_paid:
+            logger.warning(
+                f"Invoice {self.id} is marked as PAID but amount paid is less than total amount"
+            )
             return False
 
         if self.status == InvoiceStatus.CANCELLED and self.is_fully_paid:
+            logger.warning(
+                f"Invoice {self.id} is marked as CANCELLED but has been fully paid"
+            )
             return False
 
         # Check order relationship rules
         if self.status != InvoiceStatus.DRAFT and not self.order_id:
+            logger.warning(
+                f"Invoice {self.id} is not a draft but has no associated order"
+            )
             return False
 
-        if self.order_id and self.order.is_deleted:
+        if self.order_id and hasattr(self, 'order') and self.order.is_deleted:
+            logger.warning(
+                f"Invoice {self.id} is associated with a deleted order"
+            )
             return False
 
+        logger.debug(f"Invoice {self.id} validation successful")
         return True
 
     def can_be_deleted(self) -> tuple[bool, str]:
-        """Check if invoice can be safely soft-deleted"""
-        if not super().can_be_deleted()[0]:
-            return False, super().can_be_deleted()[1]
+        """
+        Check if invoice can be safely soft-deleted.
 
-        if self.is_fully_paid:
-            return False, "Cannot delete invoice with completed payments"
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        import logging
+        logger = logging.getLogger(__name__)
 
+        # Check parent class constraints
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            logger.warning(f"Invoice {self.id} cannot be deleted: {reason}")
+            return can_delete, reason
 
-        order_can_be_deleted, reason = self.order.can_be_deleted()
-        if not order_can_be_deleted:
-            return False, reason
+        # Check if invoice is paid
+        if self.status == InvoiceStatus.PAID:
+            message = "Cannot delete a paid invoice"
+            logger.warning(f"{message} (Invoice ID: {self.id})")
+            return False, message
 
+        # Check for associated payments
+        if hasattr(self, 'payments') and self.payments.exists():
+            payment_count = self.payments.count()
+            message = f"Cannot delete invoice with {payment_count} associated payment(s)"
+            logger.warning(f"{message} (Invoice ID: {self.id})")
+            return False, message
+
+        # Check for associated order if applicable
+        if hasattr(self, 'order') and self.order:
+            order_can_be_deleted, reason = self.order.can_be_deleted()
+            if not order_can_be_deleted:
+                logger.warning(
+                    f"Cannot delete invoice {self.id} due to order constraints: {reason}"
+                )
+                return False, reason
+
+        logger.info(f"Invoice {self.id} can be safely deleted")
         return True, ""
 
     @property
@@ -281,6 +346,11 @@ class Invoice(CommonModel):
             new_num = 1
 
         return f"{prefix}-{date_part}-{new_num:05d}"
+
+    @property
+    def status_display(self):
+        """Get the display name of the invoice status."""
+        return self.status.name
 
     def mark_issued(self):
         """Mark the invoice as issued."""

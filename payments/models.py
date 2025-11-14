@@ -214,8 +214,7 @@ class Payment(CommonModel):
             return False, "Cannot delete a completed payment"
 
         if self.status in [PaymentStatus.REFUNDED, PaymentStatus.PENDING]:
-            status_display = dict(PaymentStatus.choices).get(self.status, self.status)
-            return False, f"Cannot delete a payment with status '{status_display}'"
+            return False, f"Cannot delete a payment with status '{self.status_display}'"
 
         return True, ""
 

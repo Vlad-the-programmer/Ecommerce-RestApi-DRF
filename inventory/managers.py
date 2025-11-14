@@ -95,6 +95,53 @@ class WarehouseManager(SoftDeleteManager):
             'is_express_available'  # Prefer express available
         ).first()
 
+    def get_active_orders(self, warehouse_id: int):
+        """Get all active orders for a specific warehouse.
+
+        Args:
+            warehouse_id: ID of the warehouse to get active orders for
+
+        Returns:
+            QuerySet: QuerySet of active Order objects associated with the warehouse
+        """
+        from orders.models import Order
+        from orders.enums import active_order_statuses
+
+        # Get the warehouse
+        warehouse = self.get_queryset().filter(id=warehouse_id).first()
+        if not warehouse:
+            return Order.objects.none()
+
+        # Get all inventory items for this warehouse that have available stock
+        inventory_items = warehouse.inventory_items.filter(
+            quantity_available__gt=0,
+            is_active=True,
+            is_deleted=False
+        ).select_related('product_variant')
+
+        # Get all product variant IDs from the inventory
+        variant_ids = list(inventory_items.values_list('product_variant_id', flat=True))
+
+        # Find all order items that contain these product variants
+        from orders.models import OrderItem
+        order_items = OrderItem.objects.filter(
+            product_variant_id__in=variant_ids,
+            order__is_active=True,
+            order__is_deleted=False,
+            is_active=True,
+            is_deleted=False
+        ).select_related('order')
+
+        # Get unique order IDs
+        order_ids = order_items.values_list('order_id', flat=True).distinct()
+
+        # Return the orders that are in active status
+        return Order.objects.filter(
+            id__in=order_ids,
+            status__in=active_order_statuses
+        ).distinct().order_by('-date_created')
+
+
 
 class InventoryManager(SoftDeleteManager):
     """

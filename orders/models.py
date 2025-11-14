@@ -77,28 +77,43 @@ class OrderTax(CommonModel):
         """
         # Check parent class validation
         if not super().is_valid():
+            logger.warning(f"Order tax {self.id} failed basic model validation")
             return False
             
         # Check if order exists and is valid
         if not hasattr(self, 'order') or not self.order or self.order.is_deleted:
+            logger.debug(f"Order for this tax does not exist ({not hasattr(self, 'order')} \
+                            or is deleted -> ({self.order.is_deleted})")
             return False
             
         # Check if amount is valid
         if self.amount < 0:
+            logger.debug(f"Order Tax failed. Order Tax amount is < 0")
             return False
             
         # Check if rate is within valid range (0-1)
         if not (0 <= float(self.rate) <= 1):
+            logger.debug(f"Order Tax failed. Order Tax rate is not within valid range (0-1)")
             return False
             
         # Check if tax_value is correctly calculated
         expected_tax = Decimal(str(self.amount)) * Decimal(str(self.rate))
         if abs(float(self.tax_value) - float(expected_tax)) > 0.01:  # Allow for small floating point differences
+            message = (
+                    f"Order Tax failed. Order Tax tax_value is not correctly calculated"
+                    f"abs(float(self.tax_value) - float(expected_tax)) > 0.01 is False"
+            )
+            logger.debug(message)
             return False
             
         # Check if amount_with_taxes is correctly calculated
         expected_total = self.amount + self.tax_value
         if abs(float(self.amount_with_taxes) - float(expected_total)) > 0.01:
+            message = (
+                    f"Order Tax failed. Order Tax amount_with_taxes is not correctly calculated"
+                    f"abs(float(self.amount_with_taxes) - float(expected_total)) > 0.01 is False"
+            )
+            logger.debug(message)
             return False
             
         return True
@@ -117,10 +132,12 @@ class OrderTax(CommonModel):
         # Check if order exists and is in a state that allows tax deletion
         if not hasattr(self, 'order') or not self.order:
             return True, ""
-            
+
+        from orders.enums import active_order_statuses
+
         # Prevent deletion if order is not in a draft or pending state
-        if self.order.status not in [OrderStatuses.PENDING, OrderStatuses.DRAFT]:
-            return False, "Cannot delete tax from an order that is not in draft or pending status"
+        if self.order.status not in active_order_statuses:
+            return False, f"Cannot delete tax from an active order with status {self.order.status_display}"
             
         return True, ""
         
@@ -512,9 +529,11 @@ class Order(CommonModel):
         if not can_delete:
             return False, reason
 
+        from orders.enums import active_order_statuses
+
         # Check if order has been paid for
-        if self.status in [OrderStatuses.PAID, OrderStatuses.COMPLETED, OrderStatuses.DELIVERED]:
-            return False, "Cannot delete a paid or completed order"
+        if self.status in active_order_statuses and self.is_active:
+            return False, "Cannot delete an active order"
 
         # Check order items
         if self.order_items.exists():
@@ -603,6 +622,11 @@ class Order(CommonModel):
     def display_order_number(self):
         """Formatted order number for display."""
         return self.order_number
+
+    @property
+    def status_display(self):
+        """Get the display name of the order status."""
+        return dict(OrderStatuses.choices).get(self.status, self.status)
 
     def can_be_cancelled(self):
         """Check if order can be cancelled."""

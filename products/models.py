@@ -1,14 +1,17 @@
 import logging
 from datetime import timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import FileExtensionValidator, MaxLengthValidator, MinValueValidator
 from django.db import models
 from django.utils import timezone
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 
 from common.models import CommonModel, SlugFieldCommonModel
+from common.validators import FileSizeValidator
 from orders.enums import OrderStatuses
 from orders.models import OrderItem
 from products.enums import (ProductCondition, ProductStatus,
@@ -181,51 +184,167 @@ class ProductVariant(CommonModel):
         ]
 
     def is_valid(self) -> bool:
-        """Check if product variant is valid for sale.
+        """
+        Check if product variant is valid for sale.
 
         Returns:
-            bool: True if variant is valid for sale, False otherwise
+            bool: True if variant is valid for sale, False otherwise with detailed logging
         """
+        logger = logging.getLogger(__name__)
+
+        # Basic model validation
         if not super().is_valid():
+            logger.warning(f"Variant {self.id} failed basic model validation")
             return False
 
-        # Check if the product is valid
-        if not self.product.is_valid():
+        # Check if the product is valid and active
+        if not self.product or not self.product.is_valid():
+            logger.warning(f"Variant {self.id} has an invalid or inactive product")
             return False
 
-        # Check if variant has required attributes
+        # Check if the variant is active and not deleted
+        if not self.is_active or self.is_deleted:
+            logger.warning(f"Variant {self.id} is not active or has been deleted")
+            return False
+
+        # Check if variant has at least one attribute
         if not any([self.color, self.size, self.material, self.style]):
+            logger.warning(
+                f"Variant {self.id} is missing required attributes. "
+                f"At least one of color, size, material, or style must be set"
+            )
             return False
 
-        # Check if variant has a valid SKU
+        # Validate SKU
         if not self.sku or not self.sku.strip():
+            logger.warning(f"Variant {self.id} has an empty or invalid SKU")
             return False
 
-        # For products with inventory tracking, check stock
-        if self.product.track_inventory and not self.is_in_stock:
+        # Check for duplicate SKU (case-insensitive)
+        duplicate_sku = ProductVariant.objects.filter(
+            sku__iexact=self.sku,
+            is_deleted=False,
+            product_id=self.product_id
+        ).exclude(pk=self.pk).exists()
+
+        if duplicate_sku:
+            logger.warning(f"Variant {self.id} has a duplicate SKU: {self.sku}")
             return False
 
+        # Price validation
+        if not isinstance(self.price_adjustment, (int, float, Decimal)):
+            logger.warning(
+                f"Variant {self.id} has an invalid price adjustment: {self.price_adjustment}"
+            )
+            return False
+
+        # For products with inventory tracking
+        if self.product.track_inventory:
+            if not hasattr(self, 'stock_quantity') or not isinstance(self.stock_quantity, int):
+                logger.warning(f"Variant {self.id} has invalid stock quantity")
+                return False
+
+            if self.stock_quantity < 0:
+                logger.warning(
+                    f"Variant {self.id} has negative stock quantity: {self.stock_quantity}"
+                )
+                return False
+
+            # Check if variant is in stock if required
+            if not self.is_in_stock:
+                logger.info(f"Variant {self.id} is out of stock")
+                return False
+
+        logger.debug(f"Variant {self.id} validation successful")
         return True
 
     def can_be_deleted(self) -> tuple[bool, str]:
         """
         Check if variant can be safely soft-deleted.
+
         Returns:
             tuple: (can_delete: bool, reason: str)
         """
-        if not super().can_be_deleted()[0]:
-            return False, super().can_be_deleted()[1]
 
-        # Check for active orders with this variant
-        from orders.models import OrderItem
-        order_items = OrderItem.objects.filter(
-                variant=self,
-                order__status__in=[OrderStatuses.PENDING, OrderStatuses.UNPAID, OrderStatuses.APPROVED, OrderStatuses.SHIPPED, OrderStatuses.PAID, OrderStatuses.COMPLETED, OrderStatuses.DELIVERED]
-        )
+        # Check parent class constraints
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            logger.warning(f"Variant {self.id} cannot be deleted: {reason}")
+            return can_delete, reason
 
-        if order_items.exists():
-            return False, "Cannot delete variant with active or pending orders"
+        from orders.enums import active_order_statuses
+
+
+        # Get active order items with this variant
+        active_order_items = OrderItem.objects.filter(
+            variant=self,
+            order__status__in=active_order_statuses
+        ).select_related('order').order_by('-order__date_created')[:5]  # Get most recent 5 for logging
+
+        if active_order_items.exists():
+            order_ids = [str(item.order.id) for item in active_order_items]
+            order_info = ", ".join(order_ids)
+            if active_order_items.count() > 5:
+                order_info += f" and {active_order_items.count() - 5} more"
+
+            message = (
+                f"Cannot delete variant {self.id} as it is associated with active/pending orders. "
+                f"Order IDs: {order_info}"
+            )
+            logger.warning(message)
+            return False, message
+
+        # Check if this is the last variant of the product
+        if not self.product.has_variants:
+            other_variants = ProductVariant.objects.filter(
+                product=self.product,
+                is_deleted=False,
+                is_active=True
+            ).exclude(pk=self.pk).exists()
+
+            if not other_variants and self.product.status == ProductStatus.PUBLISHED:
+                message = (
+                    f"Cannot delete the only variant of published product {self.product_id}. "
+                    "The product would be left without any variants."
+                )
+                logger.warning(message)
+                return False, message
+
+        logger.info(f"Variant {self.id} can be safely deleted")
         return True, ""
+
+    def save(self, *args, **kwargs):
+        """Override save to handle variant-specific logic"""
+        # Ensure price adjustment is a Decimal
+        if not isinstance(self.price_adjustment, Decimal):
+            try:
+                self.price_adjustment = Decimal(str(self.price_adjustment))
+            except (TypeError, ValueError, InvalidOperation):
+                self.price_adjustment = Decimal('0.00')
+
+        # Ensure stock quantity is an integer
+        if hasattr(self, 'stock_quantity') and not isinstance(self.stock_quantity, int):
+            try:
+                self.stock_quantity = int(self.stock_quantity)
+            except (TypeError, ValueError):
+                self.stock_quantity = 0
+
+        # Auto-generate SKU if not provided
+        if not self.sku and self.product:
+            base_sku = self.product.sku or f"PRD{self.product_id:06d}"
+            attr_parts = []
+            if self.color:
+                attr_parts.append(self.color[:3].upper())
+            if self.size:
+                attr_parts.append(str(self.size).upper())
+            if self.material:
+                attr_parts.append(self.material[:3].upper())
+            if self.style:
+                attr_parts.append(self.style[:3].upper())
+
+            self.sku = f"{base_sku}-{'-'.join(attr_parts)}" if attr_parts else f"{base_sku}-VAR"
+
+        super().save(*args, **kwargs)
 
     @property
     def final_price(self):
@@ -317,23 +436,36 @@ class ProductImage(CommonModel):
     product = models.ForeignKey(
         "products.Product",
         on_delete=models.PROTECT,
-        related_name='product_images'
+        related_name='product_images',
+        verbose_name=_("Product"),
+        help_text=_("The product this image belongs to")
     )
     image = models.ImageField(
         upload_to='products/',
         verbose_name=_("Image"),
-        help_text=_("Product image for display")
+        help_text=_("Upload a high-quality product image (recommended size: 800x800px, max 5MB)"),
+        validators=[
+            FileExtensionValidator(allowed_extensions=['jpg', 'jpeg', 'png', 'webp']),
+            FileSizeValidator(5 * 1024 * 1024)  # 5MB
+        ]
     )
     alt_text = models.CharField(
         max_length=200,
         blank=True,
         verbose_name=_("Alt Text"),
-        help_text=_("Alternative text for accessibility and SEO")
+        help_text=_("Alternative text for accessibility and SEO (recommended: max 125 characters)"),
+        validators=[MaxLengthValidator(200)]
     )
     display_order = models.IntegerField(
         default=0,
         verbose_name=_("Display Order"),
-        help_text=_("Order in which images are displayed (lower numbers first)")
+        help_text=_("Order in which images are displayed (lower numbers first)"),
+        validators=[MinValueValidator(0)]
+    )
+    is_primary = models.BooleanField(
+        default=False,
+        verbose_name=_("Primary Image"),
+        help_text=_("Set as the main product image (only one image can be primary)")
     )
 
     class Meta:
@@ -344,31 +476,188 @@ class ProductImage(CommonModel):
         indexes = CommonModel.Meta.indexes + [
             models.Index(fields=['product', 'is_deleted']),
             models.Index(fields=['product', 'display_order', 'is_deleted']),
+            models.Index(fields=['is_primary']),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=['product', 'is_primary'],
+                condition=models.Q(is_primary=True, is_deleted=False),
+                name='unique_primary_image_per_product'
+            )
+        ]
+
+    def __str__(self):
+        return f"Image for {self.product.product_name} (Order: {self.display_order})"
+
+    def clean(self):
+        """Additional model validation"""
+        super().clean()
+
+        # Ensure only one primary image per product
+        if self.is_primary and not self.is_deleted:
+            # Check if there's already a primary image for this product
+            existing_primary = ProductImage.objects.filter(
+                product=self.product,
+                is_primary=True,
+                is_deleted=False
+            ).exclude(pk=self.pk).exists()
+
+            if existing_primary:
+                raise ValidationError({
+                    'is_primary': _('This product already has a primary image')
+                })
 
     def is_valid(self) -> bool:
         """Check if product image is valid.
 
         Returns:
-            bool: True if image is valid, False otherwise
+            bool: True if image is valid, False otherwise with detailed logging
         """
-        return (
-                super().is_valid() and
-                bool(self.imageURL) and
-                bool(self.alt_text.strip()) and
-                self.product.is_valid()
-        )
+        logger = logging.getLogger(__name__)
+
+        # Basic model validation
+        if not super().is_valid():
+            logger.warning(f"Image {self.id} failed basic model validation")
+            return False
+
+        # Check required fields
+        if not all([self.product, self.image]):
+            logger.warning(f"Image {self.id} is missing required fields")
+            return False
+
+        # Validate image file
+        try:
+            # Check if image file exists and is accessible
+            if not self.image.storage.exists(self.image.name):
+                logger.warning(f"Image file not found: {self.image.name}")
+                return False
+
+            # Check image dimensions (min 100x100px)
+            from PIL import Image
+            with Image.open(self.image) as img:
+                width, height = img.size
+                if width < 100 or height < 100:
+                    logger.warning(
+                        f"Image {self.id} dimensions too small: {width}x{height}px "
+                        f"(minimum 100x100px)"
+                    )
+                    return False
+
+                # Check aspect ratio (between 0.5 and 2.0)
+                aspect_ratio = width / height
+                if not 0.5 <= aspect_ratio <= 2.0:
+                    logger.warning(
+                        f"Image {self.id} has extreme aspect ratio: {aspect_ratio:.2f} "
+                        f"(recommended between 0.5 and 2.0)"
+                    )
+                    return False
+
+        except Exception as e:
+            logger.error(f"Error validating image {self.id}: {str(e)}", exc_info=True)
+            return False
+
+        # Validate alt text if provided
+        if self.alt_text and len(self.alt_text.strip()) > 200:
+            logger.warning(f"Image {self.id} alt text exceeds 200 characters")
+            return False
+
+        # If this is set as primary, ensure it's valid
+        if self.is_primary and self.is_deleted:
+            logger.warning(f"Deleted image {self.id} cannot be set as primary")
+            return False
+
+        logger.debug(f"Image {self.id} validation successful")
+        return True
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if product image can be safely deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        # Check parent class constraints
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            logger.warning(f"Image {self.id} cannot be deleted: {reason}")
+            return can_delete, reason
+
+        # Check if this is the only image for the product
+        other_images = self.product.product_images.filter(
+            is_deleted=False
+        ).exclude(pk=self.pk)
+
+        if not other_images.exists() and self.product.status == ProductStatus.PUBLISHED:
+            message = "Cannot delete the only image of a published product"
+            logger.warning(f"{message} (Product ID: {self.product_id})")
+            return False, message
+
+        # Check if this is the primary image
+        if self.is_primary and other_images.exists():
+            # Set another image as primary before deletion
+            try:
+                new_primary = other_images.first()
+                new_primary.is_primary = True
+                new_primary.save(update_fields=['is_primary', 'date_updated'])
+                logger.info(
+                    f"Transferred primary status from image {self.id} to {new_primary.id} "
+                    f"for product {self.product_id}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to transfer primary status from image {self.id}: {str(e)}",
+                    exc_info=True
+                )
+                return False, "Failed to set a new primary image"
+
+        logger.info(f"Image {self.id} can be safely deleted")
+        return True, ""
+
+    def save(self, *args, **kwargs):
+        """Override save to handle primary image logic"""
+        # If this is the first image being added, make it primary
+        if not self.pk and not self.is_primary:
+            self.is_primary = not self.product.product_images.filter(
+                is_primary=True,
+                is_deleted=False
+            ).exists()
+
+        super().save(*args, **kwargs)
 
     def img_preview(self):
-        return mark_safe(f'<img src="{self.imageURL}" width="300" height="300" style="object-fit: cover;"/>')
+        """Generate HTML for admin preview"""
+        from django.utils.html import format_html
+        return format_html(
+            '<img src="{}" width="300" height="300" style="object-fit: cover;{}" />',
+            self.image.url if self.image else '',
+            'opacity: 0.5;' if self.is_deleted else ''
+        )
 
     @property
     def imageURL(self):
+        """Get the URL of the image with fallback"""
         try:
-            url = self.image.url
+            return self.image.url
+        except ValueError:
+            return f"{settings.MEDIA_ROOT}/products/default-product.png"  # Fallback image
+
+    @property
+    def dimensions(self):
+        """Get image dimensions if available"""
+        try:
+            from PIL import Image
+            with Image.open(self.image) as img:
+                return img.size  # Returns (width, height)
         except:
-            url = ''
-        return url
+            return None
+
+    @property
+    def file_size_kb(self):
+        """Get file size in KB"""
+        try:
+            return self.image.size / 1024
+        except (ValueError, OSError):
+            return 0
 
 
 class Product(SlugFieldCommonModel):
@@ -421,7 +710,8 @@ class Product(SlugFieldCommonModel):
         decimal_places=2,
         null=True,
         blank=True,
-        verbose_name=_("Compare At Price")
+        verbose_name=_("Compare At Price"),
+        help_text=_("Original price before discount. Used to show the 'was' price when the product is on sale.")
     )
 
     product_description = models.TextField(
@@ -610,53 +900,6 @@ class Product(SlugFieldCommonModel):
         ]
         ordering = ['product_name']
 
-    def is_valid(self) -> bool:
-        """Check if product is valid for sale.
-
-        Returns:
-            bool: True if product is valid for sale, False otherwise
-        """
-        if not super().is_valid():
-            return False
-
-        # Basic validation
-        if not all([self.product_name.strip(), self.product_description.strip()]):
-            return False
-
-        # Status check
-        if self.status != ProductStatus.PUBLISHED:
-            return False
-
-        # Price validation
-        if self.price <= 0:
-            return False
-
-        # Digital product validation
-        if self.product_type == ProductType.DIGITAL and not self.download_file:
-            return False
-
-        # Service product validation
-        if (self.product_type == ProductType.SERVICE and self.location_required and
-                self.service_type in [ServiceType.CONSULTATION, ServiceType.REPAIR,
-                                      ServiceType.TRAINING, ServiceType.INSTALLATION] and not self.location):
-            return False
-
-        # Check if product has variants
-        if self.has_variants:
-            # If product has variants, at least one variant must be valid
-            if not any(
-                    variant.is_valid() for variant in self.product_variants.filter(is_deleted=False, is_active=True)):
-                return False
-        else:
-            # For products without variants, check stock
-            if self.track_inventory and not self.total_stock_quantity > 0:
-                return False
-
-        # Check if product is expired
-        if self.is_expired:
-            return False
-
-        return True
 
     def save(self, *args, **kwargs):
         # Auto-update stock_status based on variants
@@ -675,35 +918,148 @@ class Product(SlugFieldCommonModel):
 
         super().save(*args, **kwargs)
 
+    def is_valid(self) -> bool:
+        """Check if product is valid for sale.
+
+        Returns:
+            bool: True if product is valid for sale, False otherwise with detailed logging
+        """
+        logger = logging.getLogger(__name__)
+
+        # Basic model validation
+        if not super().is_valid():
+            logger.warning(f"Product {self.id} failed basic model validation")
+            return False
+
+        # Required fields validation
+        required_fields = {
+            'product_name': self.product_name,
+            'product_description': self.product_description,
+            'category': self.category
+        }
+
+        for field, value in required_fields.items():
+            if not value or (isinstance(value, str) and not value.strip()):
+                logger.warning(f"Product {self.id} is missing required field: {field}")
+                return False
+
+        # Status check
+        if self.status != ProductStatus.PUBLISHED:
+            logger.info(f"Product {self.id} is not published (status: {self.status})")
+            return False
+
+        # Price validation
+        if not isinstance(self.price, (int, float, Decimal)) or self.price <= 0:
+            logger.warning(f"Product {self.id} has invalid price: {self.price}")
+            return False
+
+        # Digital product validation
+        if self.product_type == ProductType.DIGITAL:
+            if not self.download_file:
+                logger.warning(f"Digital product {self.id} is missing download file")
+                return False
+            if not self.file_size or self.file_size <= 0:
+                logger.warning(f"Digital product {self.id} has invalid file size")
+                return False
+
+        # Service product validation
+        if self.product_type == ProductType.SERVICE:
+            if (self.location_required and
+                    self.service_type in [ServiceType.CONSULTATION, ServiceType.REPAIR,
+                                          ServiceType.TRAINING, ServiceType.INSTALLATION] and
+                    not self.location):
+                logger.warning(f"Service product {self.id} requires a location but none is set")
+                return False
+
+        # Variant validation
+        if self.has_variants:
+            active_variants = self.product_variants.filter(is_deleted=False, is_active=True)
+            if not active_variants.exists():
+                logger.warning(f"Product {self.id} has no active variants")
+                return False
+
+            valid_variants = [v for v in active_variants if v.is_valid()]
+            if not valid_variants:
+                logger.warning(f"Product {self.id} has no valid variants")
+                return False
+
+            logger.debug(f"Product {self.id} has {len(valid_variants)} valid variants")
+        else:
+            # Simple product stock validation
+            if self.track_inventory and not self.total_stock_quantity > 0:
+                logger.warning(f"Product {self.id} is out of stock and track_inventory is enabled")
+                return False
+
+        # Expiration check
+        if self.is_expired:
+            logger.info(f"Product {self.id} has expired")
+            return False
+
+        logger.debug(f"Product {self.id} validation successful")
+        return True
+
     def can_be_deleted(self) -> tuple[bool, str]:
         """
         Check if product can be safely soft-deleted.
+
         Returns:
             tuple: (can_delete: bool, reason: str)
         """
-        if not super().can_be_deleted()[0]:
-            return False, super().can_be_deleted()[1]
+        logger = logging.getLogger(__name__)
 
-        variants = self.product_variants.filter(
-                is_deleted=False,
-                is_active=True
-        )
+        # Check parent class constraints
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            logger.warning(f"Product {self.id} cannot be deleted: {reason}")
+            return can_delete, reason
+
         # Check for active variants
-        if self.has_variants and variants.exists():
-            return False, "Cannot delete product with active variants"
+        active_variants = self.product_variants.filter(is_deleted=False, is_active=True)
+        if self.has_variants and active_variants.exists():
+            variant_info = ", ".join(str(v.id) for v in active_variants[:3])
+            if active_variants.count() > 3:
+                variant_info += f" and {active_variants.count() - 3} more"
+            message = f"Cannot delete product {self.id} with active variants: {variant_info}"
+            logger.warning(message)
+            return False, message
 
-        for variant in variants:
-            variant_can_be_deleted, reason = variant.can_be_deleted()
-            if not variant_can_be_deleted:
-                return False, reason
+        # Check variant-specific constraints
+        for variant in active_variants:
+            can_delete, reason = variant.can_be_deleted()
+            if not can_delete:
+                logger.warning(f"Product {self.id} has variant {variant.id} that cannot be deleted: {reason}")
+                return False, f"Variant {variant.id}: {reason}"
 
         # Check for active promotions
-        if hasattr(self, 'coupons') and self.coupons.filter(
+        if hasattr(self, 'coupons'):
+            active_coupons = self.coupons.filter(
                 is_active=True,
                 end_date__gte=timezone.now()
-        ).exists():
-            return False, "Cannot delete product with active promotions"
+            )
+            if active_coupons.exists():
+                coupon_info = ", ".join(c.coupon_code for c in active_coupons[:3])
+                if active_coupons.count() > 3:
+                    coupon_info += f" and {active_coupons.count() - 3} more"
+                message = f"Cannot delete product {self.id} with active coupons: {coupon_info}"
+                logger.warning(message)
+                return False, message
 
+        # Check for active orders
+        if hasattr(self, 'order_items'):
+            from orders.enums import active_order_statuses
+            active_orders = self.order_items.filter(
+                order__status__in=active_order_statuses
+            ).select_related('order').distinct('order')
+
+            if active_orders.exists():
+                order_info = ", ".join(str(o.order.id) for o in active_orders[:3])
+                if active_orders.count() > 3:
+                    order_info += f" and {active_orders.count() - 3} more"
+                message = f"Cannot delete product {self.id} with active orders: {order_info}"
+                logger.warning(message)
+                return False, message
+
+        logger.info(f"Product {self.id} can be safely deleted")
         return True, ""
 
     @property

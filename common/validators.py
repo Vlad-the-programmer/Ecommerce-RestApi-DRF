@@ -1,7 +1,10 @@
 from django.utils.translation import gettext_lazy as _
 from django.core.exceptions import ValidationError
+from django.template.defaultfilters import filesizeformat
+from django.utils.deconstruct import deconstructible
 
 
+@deconstructible
 class FileSizeValidator:
     """
     Validator for checking the size of uploaded files.
@@ -11,10 +14,11 @@ class FileSizeValidator:
 
     def __init__(self, max_size, message=None, code=None):
         self.max_size = max_size
-        if message is not None:
-            self.message = message
-        if code is not None:
-            self.code = code
+        self.message = message or _(
+            f'File size must be no more than {filesizeformat(max_size)}. '
+            f'Your file is %(filesize)s.'
+        )
+        self.code = code or _('file_too_large')
 
     def __call__(self, value):
         if value.size > self.max_size:
@@ -22,15 +26,16 @@ class FileSizeValidator:
                 self.message,
                 code=self.code,
                 params={
-                    'max_size': self._format_size(self.max_size),
-                    'size': self._format_size(value.size)
+                    'max_size': filesizeformat(self.max_size),
+                    'filesize': filesizeformat(value.size),
+                    'max_size_bytes': self.max_size,
+                    'filesize_bytes': value.size,
                 }
             )
 
-    def _format_size(self, size):
-        """Format the size to a human-readable format."""
-        for unit in ['bytes', 'KB', 'MB', 'GB']:
-            if size < 1024.0:
-                return f"{size:.1f} {unit}"
-            size /= 1024.0
-        return f"{size:.1f} TB"
+    def __eq__(self, other):
+        return (
+                isinstance(other, self.__class__) and
+                self.max_size == other.max_size and
+                self.message == other.message
+        )
