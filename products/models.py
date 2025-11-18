@@ -861,7 +861,7 @@ class Product(SlugFieldCommonModel):
         db_table = 'products'
         verbose_name = 'Product'
         verbose_name_plural = 'Products'
-        indexes = [
+        indexes = SlugFieldCommonModel.Meta.indexes + [
             # Core indexes
             models.Index(fields=['product_name']),
             models.Index(fields=['category', 'status']),

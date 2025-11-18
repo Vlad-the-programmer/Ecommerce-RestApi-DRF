@@ -454,7 +454,7 @@ class SavedCart(CommonModel):
                 violation_error_message=_('Name is required for non-default saved carts.')
             )
         ]
-        indexes = [
+        indexes = CommonModel.Meta.indexes + [
             # User-specific queries
             models.Index(fields=['user', 'is_deleted', 'is_active']),
             models.Index(fields=['user', 'is_default']),
@@ -647,7 +647,7 @@ class SavedCartItem(CommonModel):
                 name='unique_product_per_active_saved_cart'
             ),
         ]
-        indexes = [
+        indexes = CommonModel.Meta.indexes + [
             # Cart-item relationships
             models.Index(fields=['saved_cart', 'is_deleted']),
             models.Index(fields=['product', 'is_deleted']),

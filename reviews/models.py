@@ -1,13 +1,16 @@
+import logging
 from django.core.exceptions import ValidationError
-
-from django.db import models
+from django.db import models, transaction
 from django.conf import settings
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 
 from common.models import CommonModel
 from reviews.managers import ReviewManager
 from reviews.utils import get_stars_for_rating
+
+logger = logging.getLogger(__name__)
 
 
 class Review(CommonModel):
@@ -80,49 +83,140 @@ class Review(CommonModel):
         """
         Check if the review is valid according to business rules.
 
+        Args:
+            log_errors: If True, logs validation errors to the logger.
+
         Returns:
             bool: True if the review is valid, False otherwise
         """
+        validation_errors = []
+
         # Call parent's is_valid first
         if not super().is_valid():
-            return False
+            validation_errors.append("Base validation failed (inactive or deleted)")
 
         # Check required fields
-        if not all([self.user_id, self.product_id, self.rating is not None]):
-            return False
+        if not self.user_id:
+            validation_errors.append("User is required")
+        if not self.product_id:
+            validation_errors.append("Product is required")
+        if self.rating is None:
+            validation_errors.append("Rating is required")
 
-        # Rating must be between 0 and 5
-        if not (Decimal('0.00') <= self.rating <= Decimal('5.00')):
-            return False
+        # Rating validation
+        try:
+            rating = Decimal(str(self.rating)) if not isinstance(self.rating, Decimal) else self.rating
+            if not (Decimal('0.00') <= rating <= Decimal('5.00')):
+                validation_errors.append(f"Rating must be between 0.00 and 5.00, got {rating}")
+        except (ValueError, DecimalException, TypeError) as e:
+            validation_errors.append(f"Invalid rating value: {self.rating} ({str(e)})")
 
-        # If content is provided, it must be non-empty
+        # Content validation
         if self.content and not self.content.strip():
-            return False
+            validation_errors.append("Content cannot be empty if provided")
 
-        # Title, if provided, should not exceed max length
+        # Title validation
         if self.title and len(self.title) > 255:
-            return False
+            validation_errors.append(f"Title cannot exceed 255 characters (got {len(self.title)})")
 
-        # Check if user exists and is active
+        # User validation
         if hasattr(self, 'user') and (not self.user or not self.user.is_active):
-            return False
+            validation_errors.append("User is inactive or does not exist")
 
-        # Check if product exists and is not deleted
-        if hasattr(self, 'product') and (not self.product or self.product.is_deleted):
-            return False
+        # Product validation
+        if hasattr(self, 'product'):
+            if not self.product:
+                validation_errors.append("Product does not exist")
+            elif self.product.is_deleted:
+                validation_errors.append("Cannot review a deleted product")
 
-        return True
+        # Log validation errors if any
+        if validation_errors:
+            logger.warning(
+                f"Review validation failed for {self} - User: {getattr(self, 'user_id', 'None')}, "
+                f"Product: {getattr(self, 'product_id', 'None')}. "
+                f"Errors: {', '.join(validation_errors)}"
+            )
+
+        return not bool(validation_errors)
 
     def clean(self):
-        """Ensure rating value is valid."""
-        if self.rating < 0 or self.rating > 5:
-            raise ValidationError(_("Rating must be between 0 and 5."))
+        """
+        Validate model fields before saving.
+        Raises ValidationError if any validation fails.
+        """
+        super().clean()
+        
+        # Convert rating to Decimal if it's not already
+        try:
+            if self.rating is not None:
+                self.rating = Decimal(str(self.rating)).quantize(Decimal('0.01'))
+        except (ValueError, DecimalException) as e:
+            raise ValidationError({
+                'rating': _("Rating must be a valid number.")
+            }) from e
+            
+        # Validate rating range
+        if self.rating is not None and (self.rating < 0 or self.rating > 5):
+            raise ValidationError({
+                'rating': _("Rating must be between 0.00 and 5.00.")
+            })
+            
+        # Validate content length if provided
+        if self.content and len(self.content.strip()) == 0:
+            raise ValidationError({
+                'content': _("Content cannot be empty if provided.")
+            })
+            
+        # Validate title length if provided
+        if self.title and len(self.title.strip()) > 255:
+            raise ValidationError({
+                'title': _("Title cannot exceed 255 characters.")
+            })
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if the review can be safely soft-deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        # Check base class can_be_deleted first
+        base_can_delete, reason = super().can_be_deleted()
+        if not base_can_delete:
+            return False, reason
+
+        # Check if review is already deleted
+        if self.is_deleted:
+            return False, "Review is already deleted"
+
+        # Additional business rules can be added here
+        # For example, prevent deletion of reviews that are too old
+        max_days_to_delete = 30  # Example: Allow deletion within 30 days
+        if (timezone.now() - self.date_created).days > max_days_to_delete:
+            return False, f"Cannot delete reviews older than {max_days_to_delete} days"
+
+        return True, ""
 
     def short_content(self):
         """Shortened preview for admin or listings."""
-        return (self.content[:75] + "...") if len(self.content) > 75 else self.content
+        if not self.content:
+            return ""
+        content = self.content.strip()
+        return (content[:75] + "...") if len(content) > 75 else content
 
     def rating_in_stars(self) -> str:
-        """Returns a string of stars based on the rating."""
-        rating = float(self.rating)  # Convert Decimal to float for easier comparison
-        return get_stars_for_rating(rating)
+        """
+        Returns a string of stars based on the rating.
+        
+        Returns:
+            str: A string representation of the rating in stars
+        """
+        if self.rating is None:
+            return "No rating"
+        try:
+            rating = float(self.rating)
+            return get_stars_for_rating(rating)
+        except (TypeError, ValueError) as e:
+            logger.error(f"Error converting rating to stars for review {self.id}: {e}")
+            return "Rating error"

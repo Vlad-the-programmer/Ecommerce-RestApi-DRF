@@ -100,51 +100,63 @@ class CommonModel(models.Model):
         logger.warning(f"{self._meta.verbose_name} {self.id} can be safely deleted")
 
     def delete(self, *args, **kwargs):
-        """Soft delete: mark as deleted and update related objects."""
+        """
+        Soft delete: mark as deleted and update related objects.
+        Uses transaction to ensure all operations complete successfully or none do.
+        """
+        try:
+            from django.db import transaction
+            with transaction.atomic():
+                # Check if the instance can be deleted
+                self._check_can_be_deleted_or_raise_error()
 
-        self._check_can_be_deleted_or_raise_error()
+                # Update instance fields
+                self.is_deleted = True
+                self.is_active = False
+                self.date_deleted = timezone.now()
 
-        # Update instance fields
-        self.is_deleted = True
-        self.is_active = False
-        self.date_deleted = timezone.now()
-
-        # Save without triggering signals if specified
-        update_fields = ["is_deleted", "is_active", "date_deleted"]
-        if kwargs.pop('update_fields', True):
-            self.save(update_fields=update_fields)
-        else:
-            # Direct SQL update to avoid signal recursion
-            self.__class__._default_manager.filter(pk=self.pk).update(
-                is_deleted=True,
-                is_active=False,
-                date_deleted=timezone.now()
-            )
-            # Update instance to reflect changes
-            for field in update_fields:
-                setattr(self, field, getattr(self.__class__._default_filter(pk=self.pk).first(), field, None))
-
-        # Handle related objects with PROTECT or SET_NULL
-        for rel in self._meta.related_objects:
-            related_manager = getattr(self, rel.get_accessor_name(), None)
-            if not related_manager:
-                continue
-
-            if rel.on_delete == models.PROTECT:
-                if related_manager.exists():
-                    raise ValidationError(
-                        f"Cannot delete {self._meta.verbose_name} because it is referenced by {rel.related_model._meta.verbose_name}"
-                    )
-            elif rel.on_delete == models.SET_NULL:
-                if hasattr(related_manager, 'all'):
-                    # For many-to-many or reverse foreign key
-                    related_manager.update(**{rel.field.name: None})
+                # Save without triggering signals if specified
+                update_fields = ["is_deleted", "is_active", "date_deleted"]
+                if kwargs.pop('update_fields', True):
+                    self.save(update_fields=update_fields)
                 else:
-                    # For one-to-one or foreign key
-                    setattr(self, rel.get_accessor_name(), None)
-                    self.save(update_fields=[rel.get_accessor_name().split('_')[0]])
+                    # Direct SQL update to avoid signal recursion
+                    self.__class__._default_manager.filter(pk=self.pk).update(
+                        is_deleted=True,
+                        is_active=False,
+                        date_deleted=timezone.now()
+                    )
+                    # Update instance to reflect changes
+                    for field in update_fields:
+                        setattr(self, field, getattr(self.__class__._default_filter(pk=self.pk).first(), field, None))
 
-        logger.info(f"{self._meta.verbose_name} deleted: {self}")
+                # Handle related objects with PROTECT or SET_NULL
+                for rel in self._meta.related_objects:
+                    related_manager = getattr(self, rel.get_accessor_name(), None)
+                    if not related_manager:
+                        continue
+
+                    if rel.on_delete == models.PROTECT:
+                        if related_manager.exists():
+                            raise ValidationError(
+                                f"Cannot delete {self._meta.verbose_name} because it is referenced by {rel.related_model._meta.verbose_name}"
+                            )
+                    elif rel.on_delete == models.SET_NULL:
+                        if hasattr(related_manager, 'all'):
+                            # For many-to-many or reverse foreign key
+                            related_manager.update(**{rel.field.name: None})
+                        else:
+                            # For one-to-one or foreign key
+                            setattr(self, rel.get_accessor_name(), None)
+                            self.save(update_fields=[rel.get_accessor_name().split('_')[0]])
+
+                logger.info(f"{self._meta.verbose_name} deleted: {self}")
+                return True
+
+        except Exception as e:
+            logger.error(f"Error deleting {self._meta.verbose_name} {self.pk}: {str(e)}")
+            # The transaction will be rolled back automatically when the exception is raised
+            raise
 
     def hard_delete(self, *args, **kwargs):
         self._check_can_be_deleted_or_raise_error()

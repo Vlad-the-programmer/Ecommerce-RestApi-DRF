@@ -1,11 +1,16 @@
+import logging
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 
+
 from common.models import CommonModel, ItemCommonModel
 from wishlist.managers import WishListManager, WishListItemManager
+
+
+logger = logging.getLogger(__name__)
 
 
 class WishListItemPriority(models.IntegerChoices):
@@ -58,11 +63,52 @@ class Wishlist(CommonModel):
                 name='unique_active_wishlist_per_user'
             ),
         ]
-        indexes = [
+        indexes = CommonModel.Meta.indexes + [
             models.Index(fields=["user"], name="wishlist_user_idx"),
             models.Index(fields=["is_public", "is_deleted"], name="wishlist_public_status_idx"),
             models.Index(fields=["user", "is_public", "is_deleted"], name="wishlist_user_is_public_idx"),
         ]
+
+
+    def is_valid(self):
+        """
+        Check if the wishlist is valid according to business rules.
+
+        Returns:
+            bool: True if the wishlist is valid, False otherwise
+        """
+        is_valid = True
+        validation_errors = []
+
+        if not self.name or not self.name.strip():
+            is_valid = False
+            validation_errors.append("Wishlist name is required")
+
+        if not self.user and not self.is_public:
+            is_valid = False
+            validation_errors.append("Guest wishlists must be public")
+
+        if not is_valid:
+            logger.warning(
+                f"Wishlist validation failed for {self.id or 'new wishlist'}. "
+                f"Errors: {', '.join(validation_errors)}"
+            )
+        
+        return is_valid
+
+    def can_be_deleted(self):
+        """
+        Check if the wishlist can be safely deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+                - can_delete: True if the wishlist can be deleted, False otherwise
+                - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
+        """
+        if hasattr(self, 'wishlist_items') and self.wishlist_items.exists():
+            return False, "Cannot delete wishlist with items"
+            
+        return True, ""
 
     def __str__(self):
         return f"Wishlist: {self.user} - {self.name}"
@@ -205,7 +251,7 @@ class WishListItem(ItemCommonModel):
                 name="wishlist_item_quantity_min_1"
             ),
         ]
-        indexes = [
+        indexes = ItemCommonModel.Meta.indexes + [
             # Foreign key lookups
             models.Index(fields=["wishlist"], name="wl_item_wl_idx"),
             models.Index(fields=["product"], name="wl_item_product_idx"),
@@ -225,6 +271,73 @@ class WishListItem(ItemCommonModel):
         if self.wishlist and not self.user:
             self.user = self.wishlist.user
         super().save(*args, **kwargs)
+
+    def is_valid(self, *args, **kwargs):
+        """
+        Check if the wishlist item is valid according to business rules.
+
+        Returns:
+            bool: True if the wishlist item is valid, False otherwise
+        """
+        is_valid = True
+        validation_errors = []
+
+        # Check base class validation (is_active, is_deleted, etc.)
+        if not super().is_valid():
+            is_valid = False
+            validation_errors.append("Base validation failed (inactive or deleted)")
+
+        # Product is required
+        if not self.product:
+            is_valid = False
+            validation_errors.append("Product is required")
+        # Product must be active and not deleted
+        elif self.product.is_deleted or not self.product.is_active:
+            is_valid = False
+            validation_errors.append("Product is inactive or deleted")
+
+        # If variant is specified, it must be valid
+        if self.variant and (self.variant.is_deleted or not self.variant.is_active):
+            is_valid = False
+            validation_errors.append("Variant is inactive or deleted")
+
+        # Wishlist must be valid if set
+        if self.wishlist and not self.wishlist.is_valid():
+            is_valid = False
+            validation_errors.append("Associated wishlist is invalid")
+
+        # Quantity must be at least 1
+        if self.quantity < 1:
+            is_valid = False
+            validation_errors.append("Quantity must be at least 1")
+
+        if not is_valid:
+            logger.warning(
+                f"Wishlist item validation failed for {self.id or 'new item'}. "
+                f"Errors: {', '.join(validation_errors)}"
+            )
+        
+        return is_valid
+
+    def can_be_deleted(self):
+        """
+        Check if the wishlist item can be safely deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+                - can_delete: True if the item can be deleted, False otherwise
+                - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
+        """
+        # Check base class can_be_deleted
+        base_can_delete, reason = super().can_be_deleted()
+        if not base_can_delete:
+            return False, reason
+
+        # Additional business rules for wishlist items
+        if hasattr(self, 'order_items') and self.order_items.exists():
+            return False, "Cannot delete wishlist item associated with orders"
+            
+        return True, ""
 
     def clean(self):
         """

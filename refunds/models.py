@@ -3,13 +3,18 @@ from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 
 from rest_framework.exceptions import ValidationError
 
 from common.models import CommonModel
 from refunds.enums import RefundStatus, RefundReason, RefundMethod
 from refunds.managers import RefundManager, RefundItemManager
+
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 class Refund(CommonModel):
@@ -169,7 +174,7 @@ class Refund(CommonModel):
                 name='unique_pending_refund_per_order'
             ),
         ]
-        indexes = [
+        indexes = CommonModel.Meta.indexes + [ 
             # Core query patterns
             models.Index(fields=['refund_number']),
             models.Index(fields=['status', 'is_deleted']),
@@ -199,82 +204,112 @@ class Refund(CommonModel):
     def __str__(self):
         return f"Refund #{self.refund_number} - {self.order.order_number}"
 
-    def is_valid(self) -> bool:
+    def is_valid(self, log_errors: bool = True) -> bool:
         """
         Check if the refund is valid according to business rules.
+
+        Args:
+            log_errors: If True, logs validation errors to the logger.
 
         Returns:
             bool: True if refund is valid, False otherwise
         """
+        validation_errors = []
+
+        # Call parent's is_valid first
         if not super().is_valid():
-            return False
+            validation_errors.append("Base validation failed (inactive or deleted)")
 
         # Check required fields
-        required_fields = [
-            self.refund_number,
-            self.order_id,
-            self.payment_id,
-            self.customer_id,
-            self.status in dict(RefundStatus.choices),
-            self.reason in dict(RefundReason.choices),
-            self.refund_method in dict(RefundMethod.choices),
-            self.amount_requested is not None,
-            self.requested_at is not None
-        ]
-
-        if not all(required_fields):
-            return False
+        if not self.refund_number:
+            validation_errors.append("Refund number is required")
+        if not self.order_id:
+            validation_errors.append("Order is required")
+        if not self.payment_id:
+            validation_errors.append("Payment is required")
+        if not self.customer_id:
+            validation_errors.append("Customer is required")
+        if self.status not in dict(RefundStatus.choices):
+            validation_errors.append(f"Invalid status: {self.status}")
+        if self.reason not in dict(RefundReason.choices):
+            validation_errors.append(f"Invalid reason: {self.reason}")
+        if self.refund_method not in dict(RefundMethod.choices):
+            validation_errors.append(f"Invalid refund method: {self.refund_method}")
+        if self.amount_requested is None:
+            validation_errors.append("Amount requested is required")
+        if self.requested_at is None:
+            validation_errors.append("Requested at date is required")
 
         # Amount validations
-        if self.amount_requested <= 0:
-            return False
+        try:
+            if self.amount_requested <= 0:
+                validation_errors.append("Amount requested must be greater than 0")
 
-        if self.amount_approved is not None and self.amount_approved < 0:
-            return False
+            if self.amount_approved is not None and self.amount_approved < 0:
+                validation_errors.append("Amount approved cannot be negative")
 
-        if self.amount_refunded < 0:
-            return False
+            if self.amount_refunded < 0:
+                validation_errors.append("Amount refunded cannot be negative")
 
-        # Amount relationship validations
-        if self.amount_approved is not None and self.amount_approved > self.amount_requested:
-            return False
+            # Amount relationship validations
+            if self.amount_approved is not None and self.amount_approved > self.amount_requested:
+                validation_errors.append("Amount approved cannot be greater than amount requested")
 
-        if self.amount_refunded > 0 and (self.amount_approved is None or self.amount_refunded > self.amount_approved):
-            return False
+            if self.amount_refunded > 0 and (self.amount_approved is None or self.amount_refunded > self.amount_approved):
+                validation_errors.append("Amount refunded cannot be greater than amount approved")
+
+        except (TypeError, DecimalException) as e:
+            validation_errors.append(f"Error in amount validation: {str(e)}")
 
         # Status-specific validations
         if self.status == RefundStatus.COMPLETED:
             if not self.processed_at:
-                return False
+                validation_errors.append("Processed date is required for completed refunds")
             if self.amount_refunded <= 0:
-                return False
+                validation_errors.append("Amount refunded must be greater than 0 for completed refunds")
             if self.amount_approved is None or self.amount_approved <= 0:
-                return False
+                validation_errors.append("Valid approved amount is required for completed refunds")
 
         # Date validations
         if self.processed_at and self.processed_at < self.requested_at:
-            return False
+            validation_errors.append("Processed date cannot be before requested date")
 
         # Check if order exists and is not deleted
-        if hasattr(self, 'order') and self.order.is_deleted:
-            return False
+        if hasattr(self, 'order') and (not self.order or self.order.is_deleted):
+            validation_errors.append("Order is deleted or does not exist")
 
         # Check if payment exists and is not deleted
-        if hasattr(self, 'payment') and (self.payment.is_deleted or not self.payment.is_successful):
-            return False
+        if hasattr(self, 'payment'):
+            if not self.payment:
+                validation_errors.append("Payment does not exist")
+            elif self.payment.is_deleted or not hasattr(self.payment, 'is_successful') or not self.payment.is_successful:
+                validation_errors.append("Payment is invalid or not successful")
 
         # Check if customer exists and is active
-        if hasattr(self, 'customer') and not self.customer.is_active:
-            return False
+        if hasattr(self, 'customer') and (not self.customer or not self.customer.is_active):
+            validation_errors.append("Customer is inactive or does not exist")
 
         # Check refund items if they exist
         if hasattr(self, 'items'):
-            total_items_amount = sum(item.total_amount for item in self.items.all())
-            if abs(total_items_amount - self.amount_requested) > Decimal(
-                    '0.01'):  # Allow for small rounding differences
-                return False
+            try:
+                total_items_amount = sum(item.total_amount for item in self.items.all() if not item.is_deleted)
+                if abs(total_items_amount - self.amount_requested) > Decimal('0.01'):  # Allow for small rounding differences
+                    validation_errors.append(
+                        f"Total items amount ({total_items_amount}) does not match requested amount ({self.amount_requested})")
+            except (TypeError, ValueError, DecimalException) as e:
+                validation_errors.append(f"Error calculating total items amount: {str(e)}")
 
-        return True
+        # Log validation errors if any
+        if validation_errors and log_errors:
+            logger.warning(
+                f"Refund validation failed for {self} - "
+                f"Refund: {getattr(self, 'refund_number', 'None')}, "
+                f"Order: {getattr(self, 'order_id', 'None')}, "
+                f"Customer: {getattr(self, 'customer_id', 'None')}. "
+                f"Errors: {', '.join(validation_errors)}"
+            )
+
+        return not bool(validation_errors)
 
     def save(self, *args, **kwargs):
         """Override save to generate refund number and handle status transitions."""
@@ -290,25 +325,47 @@ class Refund(CommonModel):
         super().save(*args, **kwargs)
 
     def can_be_deleted(self) -> tuple[bool, str]:
-        """Check if refund can be safely soft-deleted."""
-        if not super().can_be_deleted()[0]:
-            return False, super().can_be_deleted()[1]
+        """
+        Check if the refund can be safely soft-deleted.
 
-        if self.is_completed:
-            return False, "Completed refunds should never be deleted"
+        Returns:
+            Tuple[bool, str]: (can_delete, reason)
+                - can_delete: True if the refund can be deleted, False otherwise
+                - reason: Explanation if deletion is not allowed
+        """
+        # Check base class can_be_deleted first
+        base_can_delete, reason = super().can_be_deleted()
+        if not base_can_delete:
+            logger.warning(f"Refund {self.refund_number} cannot be deleted: {reason}")
+            return False, reason
+
+        # Check if refund is already deleted
+        if self.is_deleted:
+            return False, "Refund is already deleted"
+
+        # Check if refund is completed
+        if self.status == RefundStatus.COMPLETED:
+            return False, "Completed refunds cannot be deleted"
+
+        # Check if any money has been refunded
         if self.amount_refunded > 0:
-            return False, "Refunds with actual money movement can't be deleted"
-        if self.status != RefundStatus.CANCELLED:
-            self.status = RefundStatus.CANCELLED
-            return False, "Refund must be cancelled before deletion"
+            return False, "Cannot delete refund with processed refunds"
+
+        # Check if refund is in a terminal state
+        if self.status in [RefundStatus.CANCELLED, RefundStatus.REJECTED]:
+            return True, ""
+
+        # For pending/approved refunds, check if they can be cancelled first
+        if self.status in [RefundStatus.PENDING, RefundStatus.APPROVED]:
+            return False, "Cannot delete refund in pending or approved state"
+
         return True, ""
 
     def generate_refund_number(self):
         """Generate unique refund number."""
         import random
         import string
-        return f"REF-{timezone.now().strftime('%Y%m%d')}- \
-                {''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}"
+        return f"REF-{timezone.now().strftime('%Y%m%d')}-{''.join(random.choices(string.ascii_uppercase + string.digits, k=8))}"
 
     @property
     def is_full_refund(self):
@@ -405,11 +462,19 @@ class Refund(CommonModel):
         if self.status != RefundStatus.PENDING:
             raise ValidationError(_('Only pending refunds can be cancelled.'))
 
-        self._validate_status_transition(self.status, RefundStatus.CANCELLED)
 
-        self.status = RefundStatus.CANCELLED
-        self.is_active = False
-        self.save(update_fields=["status", "is_active", "date_updated"])
+        # Auto-cancel the refund if possible
+        try:
+            self._validate_status_transition(self.status, RefundStatus.CANCELLED)
+
+            from django.db import transaction
+            with transaction.atomic():
+                self.status = RefundStatus.CANCELLED
+                self.is_active = False
+                self.save(update_fields=["status", "is_active", "date_updated"])
+                logger.info(f"Auto-cancelled refund {self.refund_number} before deletion")
+        except Exception as e:
+            logger.error(f"Failed to auto-cancel refund {self.refund_number}: {str(e)}")
 
 
 class RefundItem(CommonModel):
@@ -465,7 +530,7 @@ class RefundItem(CommonModel):
                 name='unique_order_item_per_active_refund'
             ),
         ]
-        indexes = [
+        indexes = CommonModel.Meta.indexes + [ 
             models.Index(fields=['refund', 'is_deleted']),
             models.Index(fields=['order_item', 'is_deleted']),
             models.Index(fields=['quantity', 'unit_price']),
@@ -505,61 +570,126 @@ class RefundItem(CommonModel):
                 }
             )
 
-    def is_valid(self) -> bool:
+    def is_valid(self, log_errors: bool = True) -> bool:
         """
         Check if the refund item is valid according to business rules.
+
+        Args:
+            log_errors: If True, logs validation errors to the logger.
 
         Returns:
             bool: True if refund item is valid, False otherwise
         """
+        validation_errors = []
+
+        # Call parent's is_valid first
         if not super().is_valid():
-            return False
+            validation_errors.append("Base validation failed (inactive or deleted)")
 
         # Check required fields
-        required_fields = [
-            self.refund_id,
-            self.order_item_id,
-            self.quantity > 0,
-            self.unit_price >= 0,
-            self.reason in dict(RefundReason.choices)
-        ]
-
-        if not all(required_fields):
-            return False
+        if not self.refund_id:
+            validation_errors.append("Refund reference is required")
+        if not self.order_item_id:
+            validation_errors.append("Order item reference is required")
+        if not (isinstance(self.quantity, int) and self.quantity > 0):
+            validation_errors.append(f"Quantity must be a positive integer, got {self.quantity}")
+        if not (isinstance(self.unit_price, (Decimal, float, int)) and self.unit_price >= 0):
+            validation_errors.append(f"Unit price must be a non-negative number, got {self.unit_price}")
+        if self.reason not in dict(RefundReason.choices):
+            validation_errors.append(f"Invalid reason: {self.reason}")
 
         # Check order item exists and is not deleted
-        if hasattr(self, 'order_item') and (self.order_item.is_deleted or not self.order_item.is_active):
-            return False
+        if hasattr(self, 'order_item'):
+            if not self.order_item:
+                validation_errors.append("Order item does not exist")
+            elif self.order_item.is_deleted or not self.order_item.is_active:
+                validation_errors.append("Order item is not available for refund")
+            else:
+                # Check quantity doesn't exceed available
+                try:
+                    if self.quantity > self.order_item.quantity:
+                        validation_errors.append(
+                            f"Refund quantity ({self.quantity}) exceeds available quantity ({self.order_item.quantity_available_for_refund})")
+                except (AttributeError, ValueError) as e:
+                    validation_errors.append(f"Error checking available quantity: {str(e)}")
 
         # Check refund exists and is not deleted
-        if hasattr(self, 'refund') and (self.refund.is_deleted or not self.refund.is_active):
-            return False
+        if hasattr(self, 'refund'):
+            if not self.refund:
+                validation_errors.append("Refund does not exist")
+            elif self.refund.is_deleted or not self.refund.is_active:
+                validation_errors.append("Refund is not active")
+            elif self.refund.status == RefundStatus.COMPLETED:
+                validation_errors.append("Cannot modify items of a completed refund")
 
-        # Check quantity doesn't exceed available
-        if hasattr(self, 'order_item') and self.quantity > self.order_item.quantity:
-            return False
+        # Log validation errors if any
+        if validation_errors and log_errors:
+            logger.warning(
+                f"RefundItem validation failed - "
+                f"ID: {getattr(self, 'id', 'new')}, "
+                f"Refund: {getattr(self, 'refund_id', 'None')}, "
+                f"OrderItem: {getattr(self, 'order_item_id', 'None')}. "
+                f"Errors: {', '.join(validation_errors)}"
+            )
 
-        return True
+        return not bool(validation_errors)
 
     def can_be_deleted(self) -> tuple[bool, str]:
         """
-        Check if refund item can be safely soft-deleted.
+        Check if the refund item can be safely soft-deleted.
 
         Returns:
-            tuple: (can_delete: bool, reason: str)
+            Tuple[bool, str]: (can_delete, reason)
+                - can_delete: True if the item can be deleted, False otherwise
+                - reason: Explanation if deletion is not allowed
         """
-        if not super().can_be_deleted()[0]:
-            return False, super().can_be_deleted()[1]
+        # Check base class can_be_deleted first
+        base_can_delete, reason = super().can_be_deleted()
+        if not base_can_delete:
+            logger.debug(f"RefundItem {getattr(self, 'id', 'new')} base validation failed: {reason}")
+            return False, reason
 
-        # Check if refund is already completed
-        if hasattr(self, 'refund') and self.refund.status == RefundStatus.COMPLETED:
-            return False, "Cannot delete item from a completed refund"
+        # Check if refund is already deleted
+        if self.is_deleted:
+            return False, "Refund item is already deleted"
 
+        # Check if refund exists and is not completed
+        if hasattr(self, 'refund'):
+            if not self.refund:
+                return False, "Associated refund does not exist"
+            
+            if self.refund.status == RefundStatus.COMPLETED:
+                return False, "Cannot delete item from a completed refund"
+            
+            if self.refund.status == RefundStatus.REJECTED:
+                return True, ""  # Allow deletion of items from rejected refunds
+            
+            # For pending/approved refunds, check if the refund is still in a modifiable state
+            if self.refund.status in [RefundStatus.PENDING, RefundStatus.APPROVED]:
+                # Check if the refund item has already been processed
+                if hasattr(self, 'processed_at') and self.processed_at:
+                    return False, "Cannot delete already processed refund item"
+                return True, ""
+        
+        # If we get here, the refund item can be deleted
         return True, ""
 
     def delete(self, *args, **kwargs):
-        """Override delete to prevent deletion of items from completed refunds."""
-        if hasattr(self, 'refund') and self.refund.status == RefundStatus.COMPLETED:
-            raise ValidationError(_("Cannot delete item from a completed refund"))
+        """
+        Soft delete the refund item after validation.
+        
+        Raises:
+            ValidationError: If the item cannot be deleted
+        """
+        try:
+            super().delete(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Error deleting refund item {self.id}: {str(e)}")
+            raise
 
-        super().delete(*args, **kwargs)
+        # Update parent refund amount if needed
+        if hasattr(self, 'refund') and self.refund:
+            # self.refund.update_amounts() # TODO:
+            logger.info(f"Soft deleted refund item {self.id} from refund {self.refund.refund_number}")
+        else:
+            logger.warning(f"Deleted refund item {self.id} without a valid refund reference")

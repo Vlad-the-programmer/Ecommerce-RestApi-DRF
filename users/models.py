@@ -26,7 +26,7 @@ class UserRoles(CommonModel):
         verbose_name = "User Role"
         verbose_name_plural = "User Roles"
         ordering = ["-date_created"]
-        indexes = [
+        indexes = CommonModel.Meta.indexes + [
             models.Index(fields=["user", "role", "is_deleted"]),
             models.Index(fields=["user", "is_deleted"]),
             models.Index(fields=["role", "is_deleted"]),
