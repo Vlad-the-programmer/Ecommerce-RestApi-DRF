@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Optional
 
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
@@ -69,9 +69,44 @@ class CommonModel(models.Model):
         return self.is_active and not self.is_deleted
 
     def save(self, *args, **kwargs):
-        self.full_clean()
-        super().save(*args, **kwargs)
-        logger.info(f"{self._meta.verbose_name} saved: {self}")
+        """
+              Save the model instance with validation and transaction support.
+
+              Args:
+                  *args: Variable length argument list.
+                  **kwargs: Arbitrary keyword arguments.
+
+              Raises:
+                  ValidationError: If model validation fails.
+                  Exception: For any other unexpected errors during save.
+              """
+        try:
+            # Validate before saving
+            self.full_clean()
+
+            # Use a transaction to ensure atomicity
+            with transaction.atomic():
+                super().save(*args, **kwargs)
+
+            logger.info(
+                f"Successfully saved {self._meta.verbose_name} {self.pk}",
+                extra={'model': self._meta.label, 'pk': self.pk}
+            )
+
+        except ValidationError as ve:
+            logger.error(
+                f"Validation error saving {self._meta.verbose_name} {getattr(self, 'pk', 'NEW')}: {str(ve)}",
+                exc_info=True,
+                extra={'model': self._meta.label, 'pk': getattr(self, 'pk', None)}
+            )
+            raise
+        except Exception as e:
+            logger.critical(
+                f"Unexpected error saving {self._meta.verbose_name} {getattr(self, 'pk', 'NEW')}: {str(e)}",
+                exc_info=True,
+                extra={'model': self._meta.label, 'pk': getattr(self, 'pk', None)}
+            )
+            raise
 
     def clean(self):
         """Run model validation before saving."""
@@ -103,9 +138,21 @@ class CommonModel(models.Model):
         """
         Soft delete: mark as deleted and update related objects.
         Uses transaction to ensure all operations complete successfully or none do.
+
+        Args:
+            *args: Variable length argument list.
+            **kwargs: Arbitrary keyword arguments.
+                - update_fields (bool): If True, updates fields directly via save().
+                                       If False, uses direct SQL update. Defaults to True.
+
+        Returns:
+            bool: True if deletion was successful.
+
+        Raises:
+            ValidationError: If the instance cannot be deleted due to protected relations.
+            Exception: For any other unexpected errors during deletion.
         """
         try:
-            from django.db import transaction
             with transaction.atomic():
                 # Check if the instance can be deleted
                 self._check_can_be_deleted_or_raise_error()
@@ -115,8 +162,8 @@ class CommonModel(models.Model):
                 self.is_active = False
                 self.date_deleted = timezone.now()
 
-                # Save without triggering signals if specified
-                update_fields = ["is_deleted", "is_active", "date_deleted"]
+                # Save with or without signals based on kwargs
+                update_fields = ["is_deleted", "is_active", "date_deleted", "date_updated"]
                 if kwargs.pop('update_fields', True):
                     self.save(update_fields=update_fields)
                 else:
@@ -124,60 +171,97 @@ class CommonModel(models.Model):
                     self.__class__._default_manager.filter(pk=self.pk).update(
                         is_deleted=True,
                         is_active=False,
-                        date_deleted=timezone.now()
+                        date_deleted=timezone.now(),
+                        date_updated=timezone.now()
                     )
-                    # Update instance to reflect changes
-                    for field in update_fields:
-                        setattr(self, field, getattr(self.__class__._default_filter(pk=self.pk).first(), field, None))
+                    # Refresh instance to reflect changes
+                    self.refresh_from_db(fields=update_fields)
 
-                # Handle related objects with PROTECT or SET_NULL
-                for rel in self._meta.related_objects:
-                    related_manager = getattr(self, rel.get_accessor_name(), None)
-                    if not related_manager:
-                        continue
+                # Handle related objects
+                self._handle_related_objects_on_delete()
 
-                    if rel.on_delete == models.PROTECT:
-                        if related_manager.exists():
-                            raise ValidationError(
-                                f"Cannot delete {self._meta.verbose_name} because it is referenced by {rel.related_model._meta.verbose_name}"
-                            )
-                    elif rel.on_delete == models.SET_NULL:
-                        if hasattr(related_manager, 'all'):
-                            # For many-to-many or reverse foreign key
-                            related_manager.update(**{rel.field.name: None})
-                        else:
-                            # For one-to-one or foreign key
-                            setattr(self, rel.get_accessor_name(), None)
-                            self.save(update_fields=[rel.get_accessor_name().split('_')[0]])
-
-                logger.info(f"{self._meta.verbose_name} deleted: {self}")
+                logger.info(
+                    f"Successfully soft-deleted {self._meta.verbose_name} {self.pk}",
+                    extra={'model': self._meta.label, 'pk': self.pk}
+                )
                 return True
 
+        except ValidationError as ve:
+            logger.error(
+                f"Validation error deleting {self._meta.verbose_name} {self.pk}: {str(ve)}",
+                exc_info=True,
+                extra={'model': self._meta.label, 'pk': self.pk}
+            )
+            raise
         except Exception as e:
-            logger.error(f"Error deleting {self._meta.verbose_name} {self.pk}: {str(e)}")
-            # The transaction will be rolled back automatically when the exception is raised
+            logger.critical(
+                f"Unexpected error deleting {self._meta.verbose_name} {self.pk}: {str(e)}",
+                exc_info=True,
+                extra={'model': self._meta.label, 'pk': self.pk}
+            )
             raise
 
+    def _handle_related_objects_on_delete(self):
+        """Handle related objects when the instance is deleted."""
+        for rel in self._meta.related_objects:
+            related_manager = getattr(self, rel.get_accessor_name(), None)
+            if not related_manager:
+                continue
+
+            if rel.on_delete == models.PROTECT:
+                if related_manager.exists():
+                    raise ValidationError(
+                        f"Cannot delete {self._meta.verbose_name} because it is referenced by {rel.related_model._meta.verbose_name}"
+                    )
+            elif rel.on_delete == models.SET_NULL:
+                if hasattr(related_manager, 'all'):
+                    # For many-to-many or reverse foreign key
+                    related_manager.update(**{rel.field.name: None})
+                else:
+                    # For one-to-one or foreign key
+                    setattr(self, rel.get_accessor_name(), None)
+                    self.save(update_fields=[rel.get_accessor_name().split('_')[0]])
+
     def hard_delete(self, *args, **kwargs):
-        self._check_can_be_deleted_or_raise_error()
-        return super().delete(*args, **kwargs)
+        """Permanently delete the instance from the database."""
+        try:
+            with transaction.atomic():
+                super().delete(*args, **kwargs)
+                logger.info(
+                    f"Successfully hard-deleted {self._meta.verbose_name} {self.pk}",
+                    extra={'model': self._meta.label, 'pk': self.pk}
+                )
+        except Exception as e:
+            logger.error(
+                f"Error hard-deleting {self._meta.verbose_name} {self.pk}: {str(e)}",
+                exc_info=True,
+                extra={'model': self._meta.label, 'pk': self.pk}
+            )
+            raise
 
     def restore(self):
-        """Restore soft-deleted instance"""
-        self.is_deleted = False
-        self.is_active = True
-        self.date_deleted = None
-        self.save(update_fields=["is_deleted", "is_active", "date_deleted"])
+        """Restore a soft-deleted instance."""
+        if not self.is_deleted:
+            return False
 
-        # ADD: Auto-restore related CASCADE objects
-        for rel in self._meta.related_objects:
-            if rel.on_delete == models.CASCADE:
-                related_manager = getattr(self, rel.get_accessor_name(), None)
-                if related_manager and hasattr(related_manager, 'all'):
-                    qs = related_manager.all()
-                    for obj in qs:
-                        if isinstance(obj, CommonModel):
-                            obj.restore()
+        try:
+            with transaction.atomic():
+                self.is_deleted = False
+                self.is_active = True
+                self.date_deleted = None
+                self.save(update_fields=["is_deleted", "is_active", "date_deleted", "date_updated"])
+                logger.info(
+                    f"Successfully restored {self._meta.verbose_name} {self.pk}",
+                    extra={'model': self._meta.label, 'pk': self.pk}
+                )
+                return True
+        except Exception as e:
+            logger.error(
+                f"Error restoring {self._meta.verbose_name} {self.pk}: {str(e)}",
+                exc_info=True,
+                extra={'model': self._meta.label, 'pk': self.pk}
+            )
+            raise
 
 
 class AuthCommonModel(CommonModel):

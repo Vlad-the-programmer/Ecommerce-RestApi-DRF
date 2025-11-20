@@ -83,9 +83,6 @@ class Review(CommonModel):
         """
         Check if the review is valid according to business rules.
 
-        Args:
-            log_errors: If True, logs validation errors to the logger.
-
         Returns:
             bool: True if the review is valid, False otherwise
         """

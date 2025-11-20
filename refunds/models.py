@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator
@@ -204,12 +204,9 @@ class Refund(CommonModel):
     def __str__(self):
         return f"Refund #{self.refund_number} - {self.order.order_number}"
 
-    def is_valid(self, log_errors: bool = True) -> bool:
+    def is_valid(self) -> bool:
         """
         Check if the refund is valid according to business rules.
-
-        Args:
-            log_errors: If True, logs validation errors to the logger.
 
         Returns:
             bool: True if refund is valid, False otherwise
@@ -300,7 +297,7 @@ class Refund(CommonModel):
                 validation_errors.append(f"Error calculating total items amount: {str(e)}")
 
         # Log validation errors if any
-        if validation_errors and log_errors:
+        if validation_errors:
             logger.warning(
                 f"Refund validation failed for {self} - "
                 f"Refund: {getattr(self, 'refund_number', 'None')}, "
@@ -410,52 +407,190 @@ class Refund(CommonModel):
             raise ValidationError(_("Cannot move to a previous status."))
 
     def approve(self, approved_amount=None, processed_by=None):
-        """Approve the refund request."""
+        """
+        Approve the refund request with transaction and logging.
+        
+        Args:
+            approved_amount (Decimal, optional): The approved refund amount. Defaults to requested amount.
+            processed_by (User, optional): User who processed the approval.
+            
+        Raises:
+            ValidationError: If refund cannot be approved
+        """
+        logger.info(
+            f"Starting refund approval - Refund: {self.refund_number}, "
+            f"Status: {self.status}, Requested Amount: {self.amount_requested}, "
+            f"Approved Amount: {approved_amount}"
+        )
+        
         if self.status != RefundStatus.PENDING:
-            raise ValidationError(_('Only pending refunds can be approved.'))
-        self._validate_status_transition(self.status, RefundStatus.APPROVED)
+            error_msg = f'Only pending refunds can be approved. Current status: {self.status}'
+            logger.error(f"Refund approval failed: {error_msg} - Refund: {self.refund_number}")
+            raise ValidationError(_(error_msg))
+            
+        try:
+            self._validate_status_transition(self.status, RefundStatus.APPROVED)
+            
+            old_status = self.status
+            self.status = RefundStatus.APPROVED
+            self.is_active = False
+            self.amount_approved = approved_amount or self.amount_requested
+            self.processed_by = processed_by
+            self.processed_at = timezone.now()
 
-        self.status = RefundStatus.APPROVED
-        self.is_active = False
-        self.amount_approved = approved_amount or self.amount_requested
-        self.processed_by = processed_by
-        self.processed_at = timezone.now()
-        self.save(update_fields=["status", "is_active", "date_updated", "amount_approved", "processed_by", "processed_at"])
+            update_fields = [
+                "status", "is_active", "date_updated",
+                "amount_approved", "processed_by", "processed_at"
+            ]
+            self.save(update_fields=update_fields)
+
+            logger.info(
+                f"Successfully approved refund - Refund: {self.refund_number}, "
+                f"Status: {old_status} -> {self.status}, "
+                f"Amount Approved: {self.amount_approved}"
+            )
+                
+        except ValidationError as ve:
+            logger.error(
+                f"Validation error approving refund {self.refund_number}: {str(ve)}",
+                exc_info=True
+            )
+            raise
+        except Exception as e:
+            logger.critical(
+                f"Unexpected error approving refund {self.refund_number}: {str(e)}",
+                exc_info=True
+            )
+            raise ValidationError(_("An error occurred while approving the refund."))
 
     def complete(self, refunded_amount=None, processed_by=None):
-        """Mark refund as completed."""
+        """
+        Mark refund as completed with transaction and logging.
+        
+        Args:
+            refunded_amount (Decimal, optional): The actual amount refunded. Defaults to approved amount.
+            processed_by (User, optional): User who processed the completion.
+            
+        Raises:
+            ValidationError: If refund cannot be completed
+        """
+        logger.info(
+            f"Starting refund completion - Refund: {self.refund_number}, "
+            f"Status: {self.status}, Approved Amount: {self.amount_approved}, "
+            f"Refunded Amount: {refunded_amount}"
+        )
+        
         if self.status != RefundStatus.APPROVED:
-            raise ValidationError(_('Only approved refunds can be completed.'))
+            error_msg = f'Only approved refunds can be completed. Current status: {self.status}'
+            logger.error(f"Refund completion failed: {error_msg} - Refund: {self.refund_number}")
+            raise ValidationError(_(error_msg))
+            
+        try:
+            self._validate_status_transition(self.status, RefundStatus.COMPLETED)
+            
+            old_status = self.status
+            self.status = RefundStatus.COMPLETED
+            self.is_active = False
+            self.amount_refunded = refunded_amount or self.amount_approved
+            self.processed_at = timezone.now()
+            self.processed_by = processed_by
 
-        self._validate_status_transition(self.status, RefundStatus.COMPLETED)
+            # Process the payment refund
+            try:
+                logger.info(f"Initiating payment refund - Refund: {self.refund_number}, Amount: {self.amount_refunded}")
+                self.payment.refund(self.amount_refunded, self.reason, self.refund_method)
+                logger.info(f"Payment refund successful - Refund: {self.refund_number}")
+            except Exception as e:
+                logger.error(
+                    f"Payment refund failed - Refund: {self.refund_number}, "
+                    f"Error: {str(e)}",
+                    exc_info=True
+                )
+                raise ValidationError(_("Failed to process payment refund."))
 
-        self.status = RefundStatus.COMPLETED
+            update_fields = [
+                "status", "is_active", "date_updated", "amount_refunded",
+                "processed_at", "payment", "processed_by"
+            ]
+            self.save(update_fields=update_fields)
 
-        self.is_active = False
-        self.amount_refunded = refunded_amount or self.amount_approved
-        self.payment.refund(self.amount_refunded, self.reason, self.refund_method) # Send a refund request to the payment processor
-        self.processed_at = timezone.now()
-        self.processed_by = processed_by
-        self.save(update_fields=["status", "is_active", "date_updated", "amount_refunded", "processed_at", "payment", "processed_by"])
+            logger.info(
+                f"Successfully completed refund - Refund: {self.refund_number}, "
+                f"Status: {old_status} -> {self.status}, "
+                f"Amount Refunded: {self.amount_refunded}"
+            )
+                
+        except ValidationError as ve:
+            logger.error(
+                f"Validation error completing refund {self.refund_number}: {str(ve)}",
+                exc_info=True
+            )
+            raise
+        except Exception as e:
+            logger.critical(
+                f"Unexpected error completing refund {self.refund_number}: {str(e)}",
+                exc_info=True
+            )
+            raise ValidationError(_("An error occurred while completing the refund."))
 
     def reject(self, processed_by=None, notes=None):
-        """Reject the refund request."""
+        """
+        Reject the refund request with transaction and logging.
+        
+        Args:
+            processed_by (User, optional): User who processed the rejection.
+            notes (str, optional): Internal notes about the rejection.
+            
+        Raises:
+            ValidationError: If refund cannot be rejected
+        """
+        logger.info(
+            f"Starting refund rejection - Refund: {self.refund_number}, "
+            f"Status: {self.status}, Notes: {bool(notes)}"
+        )
+        
         if self.status != RefundStatus.PENDING:
-            raise ValidationError(_('Only pending refunds can be rejected.'))
+            error_msg = f'Only pending refunds can be rejected. Current status: {self.status}'
+            logger.error(f"Refund rejection failed: {error_msg} - Refund: {self.refund_number}")
+            raise ValidationError(_(error_msg))
+            
+        try:
+            self._validate_status_transition(self.status, RefundStatus.REJECTED)
+            
+            old_status = self.status
+            self.status = RefundStatus.REJECTED
+            self.is_active = False
+            self.processed_by = processed_by
+            self.processed_at = timezone.now()
 
-        self._validate_status_transition(self.status, RefundStatus.REJECTED)
+            update_fields = [
+                "status", "is_active", "date_updated",
+                "processed_at", "processed_by"
+            ]
 
-        self.status = RefundStatus.REJECTED
-        self.is_active = False
-        self.processed_by = processed_by
-        self.processed_at = timezone.now()
+            if notes:
+                self.internal_notes = notes
+                update_fields.append("internal_notes")
 
-        update_fields = ["status", "is_active", "date_updated", "amount_refunded", "processed_at", "payment"]
-        if notes:
-            self.internal_notes = notes
-            update_fields.append("internal_notes")
+            self.save(update_fields=update_fields)
 
-        self.save(update_fields=update_fields)
+            logger.info(
+                f"Successfully rejected refund - Refund: {self.refund_number}, "
+                f"Status: {old_status} -> {self.status}"
+            )
+
+        except ValidationError as ve:
+            logger.error(
+                f"Validation error rejecting refund {self.refund_number}: {str(ve)}",
+                exc_info=True
+            )
+            raise
+        except Exception as e:
+            logger.critical(
+                f"Unexpected error rejecting refund {self.refund_number}: {str(e)}",
+                exc_info=True
+            )
+            raise ValidationError(_("An error occurred while rejecting the refund."))
 
     def cancel(self):
         """Cancel the refund request."""
@@ -467,12 +602,10 @@ class Refund(CommonModel):
         try:
             self._validate_status_transition(self.status, RefundStatus.CANCELLED)
 
-            from django.db import transaction
-            with transaction.atomic():
-                self.status = RefundStatus.CANCELLED
-                self.is_active = False
-                self.save(update_fields=["status", "is_active", "date_updated"])
-                logger.info(f"Auto-cancelled refund {self.refund_number} before deletion")
+            self.status = RefundStatus.CANCELLED
+            self.is_active = False
+            self.save(update_fields=["status", "is_active", "date_updated"])
+            logger.info(f"Auto-cancelled refund {self.refund_number} before deletion")
         except Exception as e:
             logger.error(f"Failed to auto-cancel refund {self.refund_number}: {str(e)}")
 
@@ -570,12 +703,9 @@ class RefundItem(CommonModel):
                 }
             )
 
-    def is_valid(self, log_errors: bool = True) -> bool:
+    def is_valid(self) -> bool:
         """
         Check if the refund item is valid according to business rules.
-
-        Args:
-            log_errors: If True, logs validation errors to the logger.
 
         Returns:
             bool: True if refund item is valid, False otherwise
@@ -623,7 +753,7 @@ class RefundItem(CommonModel):
                 validation_errors.append("Cannot modify items of a completed refund")
 
         # Log validation errors if any
-        if validation_errors and log_errors:
+        if validation_errors:
             logger.warning(
                 f"RefundItem validation failed - "
                 f"ID: {getattr(self, 'id', 'new')}, "
