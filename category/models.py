@@ -109,7 +109,6 @@ class Category(SlugFieldCommonModel):
             
         return True, ""
 
-
     def __str__(self):
         full_path = [self.name]
         parent = self.parent

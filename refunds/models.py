@@ -378,6 +378,38 @@ class Refund(CommonModel):
     def is_completed(self):
         return self.status == RefundStatus.COMPLETED
 
+    def update_amounts(self):
+        """
+        Update the refund amounts based on the current refund items.
+        This should be called after adding, updating, or removing refund items.
+        """
+        if self.status == RefundStatus.COMPLETED:
+            logger.warning(f"Cannot update amounts for completed refund {self.refund_number}")
+            return False
+
+        try:
+            # Calculate total from all non-deleted items
+            total_amount = Decimal('0.00')
+            for item in self.items.filter(is_deleted=False):
+                total_amount += item.total_amount
+
+            # Update the requested amount
+            self.amount_requested = total_amount
+            
+            # If no items left, cancel the refund
+            if total_amount == 0 and self.items.filter(is_deleted=False).count() == 0:
+                self.status = RefundStatus.CANCELLED
+                logger.info(f"No items left in refund {self.refund_number}, status set to CANCELLED")
+            
+            # Save the changes
+            self.save(update_fields=['amount_requested', 'status', 'date_updated'])
+            logger.info(f"Updated amounts for refund {self.refund_number}: amount_requested={total_amount}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating amounts for refund {self.refund_number}: {str(e)}")
+            return False
+
     def _validate_status_transition(self, old_status: str, new_status: str) -> None:
         """Validate status transitions."""
         status_order = [
@@ -806,20 +838,25 @@ class RefundItem(CommonModel):
 
     def delete(self, *args, **kwargs):
         """
-        Soft delete the refund item after validation.
+        Soft delete the refund item after validation and update parent refund amounts.
         
         Raises:
             ValidationError: If the item cannot be deleted
         """
+        # Get refund reference before deletion
+        refund = getattr(self, 'refund', None)
+        
         try:
+            # First soft delete the item
             super().delete(*args, **kwargs)
+            
+            # Update parent refund amounts if needed
+            if refund and not refund.is_deleted:
+                refund.update_amounts()
+                logger.info(f"Updated amounts after deleting refund item {self.id} from refund {refund.refund_number}")
+                
         except Exception as e:
-            logger.error(f"Error deleting refund item {self.id}: {str(e)}")
+            logger.error(f"Error deleting refund item {getattr(self, 'id', 'unknown')}: {str(e)}")
             raise
-
-        # Update parent refund amount if needed
-        if hasattr(self, 'refund') and self.refund:
-            # self.refund.update_amounts() # TODO:
-            logger.info(f"Soft deleted refund item {self.id} from refund {self.refund.refund_number}")
         else:
-            logger.warning(f"Deleted refund item {self.id} without a valid refund reference")
+            logger.info(f"Soft deleted refund item {getattr(self, 'id', 'unknown')} from refund {getattr(refund, 'refund_number', 'unknown')}")
