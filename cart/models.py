@@ -147,8 +147,8 @@ class Coupon(CommonModel):
         if not super().is_valid():
             return False
         if not self.product or not self.product.is_active or self.product.is_deleted:
-            logger.debug(f"Product for this product is {self.product or "None"} and Active: {self.product.is_active} \
-                            Deleted: {self.product.is_deleted}")
+            logger.debug(f"Product for this coupon is {self.product or 'None'} and Active: {getattr(self.product, 'is_active', 'N/A')} "
+                         f"Deleted: {getattr(self.product, 'is_deleted', 'N/A')}")
             return False
         if cart_total is not None and cart_total < self.minimum_amount:
             logger.debug(f"Coupon validation failed: cart_total ({cart_total}) is less \ "

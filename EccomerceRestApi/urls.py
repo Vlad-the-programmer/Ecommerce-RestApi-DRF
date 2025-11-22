@@ -11,6 +11,10 @@ from drf_spectacular.views import (
     SpectacularRedocView,
 )
 
+# Routers
+from cart.urls import router as cart_router
+
+
 # Import settings
 urlpatterns = [
     # Admin
@@ -43,6 +47,13 @@ urlpatterns = [
     # Add a redirect from / to /api/schema/swagger-ui/
     path('', RedirectView.as_view(url='/api/schema/swagger-ui/', permanent=False)),
 ]
+
+
+# API Endpoints
+urlpatterns += [
+    path('api/', include(cart_router.urls)),
+]
+
 
 # Serve media and static files in development
 if settings.DEBUG:
