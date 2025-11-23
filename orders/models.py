@@ -10,6 +10,7 @@ from rest_framework.exceptions import ValidationError
 from common.models import CommonModel, ItemCommonModel
 from orders.enums import OrderStatuses
 from orders.managers import OrderTaxManager, OrderItemManager, OrderManager, OrderStatusHistoryManager
+from products.enums import ProductType
 
 logger = logging.getLogger(__name__)
 
@@ -340,15 +341,6 @@ class Order(CommonModel):
                 condition=models.Q(order_number__isnull=False),
                 violation_error_message='Order number must be unique.'
             ),
-            # Ensure order has a shipping address if it's not a digital order
-            models.CheckConstraint(
-                check=(
-                        models.Q(is_digital_order=True) |
-                        models.Q(shipping_address__isnull=False)
-                ),
-                name='%(app_label)s_%(class)s_shipping_address_required',
-                violation_error_message='Shipping address is required for non-digital orders.'
-            ),
             # Prevent modifying completed/cancelled orders
             models.CheckConstraint(
                 check=~models.Q(status__in=[
@@ -373,34 +365,6 @@ class Order(CommonModel):
     def __str__(self):
         return f"Order #{self.order_number} - {self.user.email}"
 
-    @classmethod
-    def _add_dynamic_constraints(cls):
-        """Add constraints that require models to be loaded."""
-        from django.db import connection
-        from django.apps import apps
-        from django.db.models import Exists, OuterRef
-
-        # Skip if migrations haven't been run yet
-        if 'orders_order' not in connection.introspection.table_names():
-            return
-
-        OrderItem = apps.get_model('orders', 'OrderItem')
-
-        # Create a new constraint
-        constraint = models.UniqueConstraint(
-            name='%(app_label)s_%(class)s_has_items',
-            condition=Exists(
-                OrderItem.objects.filter(
-                    order_id=OuterRef('pk'),
-                    is_deleted=False
-                )
-            ),
-            violation_error_message='Order must have at least one item.'
-        )
-
-        # Add the constraint to the model's _meta
-        cls._meta.constraints = list(cls._meta.constraints) + [constraint]
-
     def generate_order_number(self):
         """Generate sequential order number: ORD-000001, ORD-000002, etc."""
         last_order = Order.objects.filter(
@@ -420,6 +384,7 @@ class Order(CommonModel):
 
     def save(self, *args, **kwargs):
         """Override save to generate order number and calculate total."""
+        update_fields = kwargs.pop('update_fields', [])
         is_new = self._state.adding
 
         if is_new:
@@ -433,20 +398,42 @@ class Order(CommonModel):
             while Order.objects.filter(order_number=self.order_number).exists():
                 self.order_number = self.generate_order_number()
 
+            update_fields.append('order_number')
+
         # Calculate total amount
         self.total_amount = self.get_order_total_amount()
-        super().save(*args, **kwargs)
+        update_fields.append('total_amount')
+        super().save(*args, **kwargs, update_fields=update_fields)
 
     def delete(self, *args, **kwargs):
         """Soft delete with status update."""
-        can_delete, reason = self.can_be_deleted()
-        if not can_delete:
-            logger.warning(f"Cannot delete order: {reason}")
-            raise ValidationError(f"Cannot delete order: {reason}")
-
         self.status = OrderStatuses.CANCELLED
-        self.save(update_fields=['status', 'date_updated'])
+        kwargs['update_fields'] = ['status', 'date_updated']
         super().delete(*args, **kwargs)
+
+    def clean(self):
+        super().clean()
+        # Skip validation for new instances or if order doesn't exist yet
+        if not self.pk:
+            return
+            
+        # Check if order has at least one non-deleted item
+        if not self.order_items.filter(is_deleted=False).exists():
+            raise ValidationError({
+                'order_items': 'Order must have at least one item.'
+            })
+            
+        # Check if this is a digital order (all products are digital)
+        is_digital_order = all(
+            item.product.product_type == ProductType.DIGITAL 
+            for item in self.order_items.filter(is_deleted=False)
+        )
+        
+        # If it's not a digital order, shipping address is required
+        if not is_digital_order and not self.shipping_address:
+            raise ValidationError({
+                'shipping_address': 'Shipping address is required for non-digital orders.'
+            })
 
     def is_valid(self, *args, **kwargs) -> bool:
         """Check if the order is valid according to business rules.
@@ -726,9 +713,6 @@ class Order(CommonModel):
         self.status = OrderStatuses.PENDING
         self.is_active = False
         self.save(update_fields=["status", "is_active", "date_updated"])
-
-
-Order._add_dynamic_constraints()
 
 
 class OrderStatusHistory(CommonModel):

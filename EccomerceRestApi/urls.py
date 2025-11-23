@@ -10,9 +10,11 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
     SpectacularRedocView,
 )
+from rest_framework.routers import DefaultRouter
 
 # Routers
 from cart.urls import router as cart_router
+from category.urls import router as category_router
 
 
 # Import settings
@@ -49,9 +51,18 @@ urlpatterns = [
 ]
 
 
-# API Endpoints
+# Create a base router for v1 API
+v1_router = DefaultRouter()
+
+# Include all the app routers under the v1 router
+v1_router.registry.extend(cart_router.registry)
+v1_router.registry.extend(category_router.registry)
+
+
+# API Endpoints with versioning
 urlpatterns += [
-    path('api/', include(cart_router.urls)),
+    # API v1 endpoints
+    path('api/v1/', include((v1_router.urls, 'v1'), namespace='v1')),
 ]
 
 

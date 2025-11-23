@@ -1,11 +1,15 @@
-import re
+from django.conf import settings
 from psycopg2 import IntegrityError
 
 from django.contrib.auth.models import BaseUserManager
 from django.utils.translation import gettext_lazy as _
+from users.enums import UserRole, user_roles_descriptions
 
 from common.managers import SoftDeleteManager
-from users.enums import UserRole, user_roles_descriptions
+from django.core.validators import EmailValidator
+
+
+email_validator = EmailValidator(allowlist=settings.ALLOWED_EMAIL_DOMAINS)
 
 
 class CustomUserManager(BaseUserManager):
@@ -29,11 +33,9 @@ class CustomUserManager(BaseUserManager):
         if not email:
             raise ValueError(_('The Email field must be set'))
 
-        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-        if not re.match(email_pattern, email):
-            raise ValueError(_('Enter a valid email address.'))
-
-        return self.normalize_email(email)
+        email = self.normalize_email(email)
+        email_validator(email)
+        return email
 
     def generate_username(self, email):
         """Generate a unique username from email."""
@@ -88,7 +90,7 @@ class CustomUserManager(BaseUserManager):
         try:
             user_role = UserRoles.objects.create(user=user, role=role, description=description)
             user.role = user_role
-            user.save()
+            user.save(update_fields=['role', 'date_updated'])
         except IntegrityError:
             # Handle duplicate role
             # A UserRoles entry with the same user and role already exists and is not marked as deleted.

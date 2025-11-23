@@ -84,8 +84,23 @@ class CommonModel(models.Model):
             # Validate before saving
             self.full_clean()
 
+
             # Use a transaction to ensure atomicity
             with transaction.atomic():
+                update_fields = kwargs.get("update_fields", [])
+                if self.pk:
+                    # Handle update_fields and force_insert/force_update
+                    if update_fields:
+                        # If we're forcing insert but have update_fields, convert to force_update
+                        if 'force_insert' in kwargs and kwargs['force_insert']:
+                            del kwargs['force_insert']
+                            kwargs['force_update'] = True
+
+                        # Only pass update_fields if it's not empty
+                        kwargs['update_fields'] = list(set(update_fields))  # Remove duplicates
+                    elif 'update_fields' in kwargs:
+                        del kwargs['update_fields']
+
                 super().save(*args, **kwargs)
 
             logger.info(
@@ -142,8 +157,9 @@ class CommonModel(models.Model):
         Args:
             *args: Variable length argument list.
             **kwargs: Arbitrary keyword arguments.
-                - update_fields (bool): If True, updates fields directly via save().
-                                       If False, uses direct SQL update. Defaults to True.
+                - update_fields (list): List of fields to update. Will be extended with default fields.
+                - update_fields_mode (str): 'extend' (default) to add to default fields,
+                                          'replace' to use only provided fields.
 
         Returns:
             bool: True if deletion was successful.
@@ -162,20 +178,35 @@ class CommonModel(models.Model):
                 self.is_active = False
                 self.date_deleted = timezone.now()
 
+                # Handle update_fields
+                update_fields = kwargs.pop('update_fields', None)
+                update_fields_mode = kwargs.pop('update_fields_mode', 'extend')
+
+                default_update_fields = ["is_deleted", "is_active", "date_deleted", "date_updated"]
+
+                if update_fields is not None:
+                    if update_fields_mode == 'extend':
+                        # Merge with default fields, removing duplicates
+                        update_fields = list(dict.fromkeys([*update_fields, *default_update_fields]))
+                    # else: use the provided update_fields as-is
+
                 # Save with or without signals based on kwargs
-                update_fields = ["is_deleted", "is_active", "date_deleted", "date_updated"]
                 if kwargs.pop('update_fields', True):
-                    self.save(update_fields=update_fields)
+                    self.save(update_fields=update_fields or default_update_fields)
                 else:
                     # Direct SQL update to avoid signal recursion
-                    self.__class__._default_manager.filter(pk=self.pk).update(
-                        is_deleted=True,
-                        is_active=False,
-                        date_deleted=timezone.now(),
-                        date_updated=timezone.now()
-                    )
+                    update_data = {
+                        'is_deleted': True,
+                        'is_active': False,
+                        'date_deleted': timezone.now(),
+                        'date_updated': timezone.now()
+                    }
+                    if update_fields:
+                        update_data = {k: v for k, v in update_data.items() if k in update_fields}
+
+                    self.__class__._default_manager.filter(pk=self.pk).update(**update_data)
                     # Refresh instance to reflect changes
-                    self.refresh_from_db(fields=update_fields)
+                    self.refresh_from_db(fields=update_fields or default_update_fields)
 
                 # Handle related objects
                 self._handle_related_objects_on_delete()
@@ -761,6 +792,24 @@ class ItemCommonModel(CommonModel):
         quantity = Decimal(str(self.quantity))
         self.total_price = price * quantity
 
+        update_fields = kwargs.get("update_fields", [])
+
+        # Only modify update_fields if we're not forcing insert
+        if 'force_insert' not in kwargs or not kwargs['force_insert']:
+            if "total_price" not in update_fields:
+                update_fields.append("total_price")
+
+            # If we have update_fields and force_insert is set, convert to force_update
+            if update_fields and 'force_insert' in kwargs:
+                del kwargs['force_insert']
+                kwargs['force_update'] = True
+
+        # Only pass update_fields if it's not empty
+        if update_fields:
+            kwargs['update_fields'] = list(set(update_fields))  # Remove duplicates
+        elif 'update_fields' in kwargs:
+            del kwargs['update_fields']
+
         super().save(*args, **kwargs)
 
 
@@ -779,7 +828,7 @@ class SlugFieldCommonModel(CommonModel):
     class Meta:
         abstract = True
         indexes = [
-            models.Index(fields=['slug'], name='common_slug_idx'),
+            models.Index(fields=['slug']),
         ]
 
     def check_slug_unique(self, slug: str) -> bool:
@@ -859,11 +908,18 @@ class SlugFieldCommonModel(CommonModel):
             self.slug = fallback_slug
 
     def save(self, *args, **kwargs):
+        update_fields = kwargs.get("update_fields", [])
         is_new = self.pk is None
+
         if is_new or not self.slug:
             # Customize fields used to generate slug per model
             fields_to_slugify = getattr(self, "slug_fields", ["slug"])
             self._generate_and_set_slug(fields_to_slugify)
+
+            # Add slug to update_fields if it's not already there
+            if "slug" not in update_fields:
+                update_fields.append("slug")
+
         super().save(*args, **kwargs)
 
 
@@ -898,24 +954,6 @@ class ShippingAddress(AddressBaseModel):
             models.Index(fields=["is_default", "is_deleted"]),  # All default addresses
         ]
         constraints = AddressBaseModel.Meta.constraints + [
-            # Ensure phone number is valid if provided
-            models.CheckConstraint(
-                check=(
-                        models.Q(phone__isnull=True) |
-                        models.Q(phone__regex=r'^\+?[0-9\s-]{5,20}$')
-                ),
-                name='%(app_label)s_%(class)s_valid_phone',
-                violation_error_message=_('Enter a valid phone number.')
-            ),
-            # Ensure at least one contact method is provided
-            models.CheckConstraint(
-                check=(
-                        models.Q(phone__isnull=False) |
-                        models.Q(email__isnull=False)
-                ),
-                name='%(app_label)s_%(class)s_require_contact',
-                violation_error_message=_('At least one contact method (phone or email) is required.')
-            ),
             # Prevent duplicate default addresses per user
             models.UniqueConstraint(
                 fields=['user'],
@@ -963,16 +1001,52 @@ class ShippingAddress(AddressBaseModel):
 
     def save(self, *args, **kwargs):
         """Override save to handle default address logic."""
+        update_fields = kwargs.get("update_fields", [])
+        is_new = self.pk is None
+
         # If this is being set as default, unset other defaults
         if self.is_default and hasattr(self, 'user'):
             self.user.shipping_addresses.exclude(pk=self.pk).update(is_default=False)
+            if "user" not in update_fields:
+                update_fields.append("user")
 
         # If this is the first address, make it default
         if hasattr(self, 'user') and not self.user.shipping_addresses.exists():
             self.is_default = True
+            if "is_default" not in update_fields:
+                update_fields.append("is_default")
 
-        super().save(*args, **kwargs)
-        logger.info(f"ShippingAddress {self.pk} saved for user {getattr(self, 'user_id', 'unknown')}")
+        # Handle update_fields and force_insert/force_update
+        if update_fields:
+            # If we're forcing insert but have update_fields, convert to force_update
+            if 'force_insert' in kwargs and kwargs['force_insert']:
+                del kwargs['force_insert']
+                kwargs['force_update'] = True
+
+            # Only pass update_fields if it's not empty
+            kwargs['update_fields'] = list(set(update_fields))  # Remove duplicates
+        elif 'update_fields' in kwargs:
+            del kwargs['update_fields']
+
+        try:
+            super().save(*args, **kwargs)
+            logger.info(
+                f"ShippingAddress {self.pk} saved for user {getattr(self, 'user_id', 'unknown')}",
+                extra={
+                    'shipping_address_id': self.pk,
+                    'user_id': getattr(self, 'user_id', 'unknown')
+                }
+            )
+        except Exception as e:
+            logger.error(
+                f"Error saving ShippingAddress for user {getattr(self, 'user_id', 'unknown')}: {str(e)}",
+                exc_info=True,
+                extra={
+                    'shipping_address_id': self.pk,
+                    'user_id': getattr(self, 'user_id', 'unknown')
+                }
+            )
+            raise
 
 
 class BillingAddress(AddressBaseModel):
@@ -1055,7 +1129,25 @@ class BillingAddress(AddressBaseModel):
                 ),
                 name='%(app_label)s_%(class)s_require_tax_id_for_business',
                 violation_error_message=_('Tax ID is required for business addresses.')
-            )
+            ),
+            # Ensure phone number is valid if provided
+            models.CheckConstraint(
+                check=(
+                        models.Q(phone__isnull=True) |
+                        models.Q(phone__regex=r'^\+?[0-9\s-]{5,20}$')
+                ),
+                name='%(app_label)s_%(class)s_valid_phone',
+                violation_error_message=_('Enter a valid phone number.')
+            ),
+            # Ensure at least one contact method is provided
+            models.CheckConstraint(
+                check=(
+                        models.Q(phone__isnull=False) |
+                        models.Q(email__isnull=False)
+                ),
+                name='%(app_label)s_%(class)s_require_contact',
+                violation_error_message=_('At least one contact method (phone or email) is required.')
+            ),
         ]
 
     def is_valid(self, *args, **kwargs) -> bool:
@@ -1161,9 +1253,37 @@ class BillingAddress(AddressBaseModel):
 
     def save(self, *args, **kwargs):
         """Override save to handle default address logic."""
+        update_fields = kwargs.get("update_fields", [])
+        is_new = self.pk is None
+
         # If this is being set as default, unset other defaults
         if self.is_default and hasattr(self, 'user'):
             self.user.billing_addresses.exclude(pk=self.pk).update(is_default=False)
+            if "user" not in update_fields:
+                update_fields.append("user")
 
-        super().save(*args, **kwargs)
-        logger.info(f"BillingAddress {self.pk} saved for user {self.user_id}")
+        # If this is the first address, make it default
+        if hasattr(self, 'user') and not self.user.billing_addresses.exists():
+            self.is_default = True
+            if "is_default" not in update_fields:
+                update_fields.append("is_default")
+
+        try:
+            super().save(*args, **kwargs)
+            logger.info(
+                f"BillingAddress {self.pk} saved for user {getattr(self, 'user_id', 'unknown')}",
+                extra={
+                    'billing_address_id': self.pk,
+                    'user_id': getattr(self, 'user_id', 'unknown')
+                }
+            )
+        except Exception as e:
+            logger.error(
+                f"Error saving BillingAddress for user {getattr(self, 'user_id', 'unknown')}: {str(e)}",
+                exc_info=True,
+                extra={
+                    'billing_address_id': self.pk,
+                    'user_id': getattr(self, 'user_id', 'unknown')
+                }
+            )
+            raise

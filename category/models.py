@@ -2,11 +2,12 @@ import logging
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
-logger = logging.getLogger(__name__)
 from rest_framework.exceptions import ValidationError
 
 from category.managers import CategoryManager
 from common.models import SlugFieldCommonModel
+
+logger = logging.getLogger(__name__)
 
 
 class Category(SlugFieldCommonModel):
@@ -66,6 +67,14 @@ class Category(SlugFieldCommonModel):
             ),
         ]
 
+    def __str__(self):
+        full_path = [self.name]
+        parent = self.parent
+        while parent:
+            full_path.insert(0, parent.name)
+            parent = parent.parent
+        return " > ".join(full_path)
+
     def is_valid(self):
         """
         Check if the category is valid according to business rules.
@@ -108,14 +117,6 @@ class Category(SlugFieldCommonModel):
             return False, "Cannot delete category with associated products"
             
         return True, ""
-
-    def __str__(self):
-        full_path = [self.name]
-        parent = self.parent
-        while parent:
-            full_path.insert(0, parent.name)
-            parent = parent.parent
-        return " > ".join(full_path)
 
     @property
     def full_name_for_slug(self):

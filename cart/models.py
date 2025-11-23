@@ -26,6 +26,8 @@ class Coupon(CommonModel):
         "products.Product",
         on_delete=models.PROTECT,
         related_name="coupons",
+        null=True,
+        blank=True,
         db_index=True,
         verbose_name=_("Product"),
         help_text=_("Product this coupon applies to")
@@ -147,7 +149,8 @@ class Coupon(CommonModel):
         if not super().is_valid():
             return False
         if not self.product or not self.product.is_active or self.product.is_deleted:
-            logger.debug(f"Product for this coupon is {self.product or 'None'} and Active: {getattr(self.product, 'is_active', 'N/A')} "
+            logger.debug(f"Product for this coupon is {self.product or 'None'} "
+                         f"and Active: {getattr(self.product, 'is_active', 'N/A')} "
                          f"Deleted: {getattr(self.product, 'is_deleted', 'N/A')}")
             return False
         if cart_total is not None and cart_total < self.minimum_amount:
@@ -440,12 +443,6 @@ class SavedCart(CommonModel):
                 condition=models.Q(is_default=True, is_deleted=False),
                 name='unique_default_saved_cart_per_user',
                 violation_error_message=_('User can only have one default saved cart.')
-            ),
-            # Ensure cart data is not empty
-            models.CheckConstraint(
-                check=models.Q(cart_data__gt={}),
-                name='saved_cart_data_not_empty',
-                violation_error_message=_('Cart data cannot be empty.')
             ),
             # Ensure name is provided if not default
             models.CheckConstraint(

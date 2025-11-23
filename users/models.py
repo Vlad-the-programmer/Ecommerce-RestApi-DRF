@@ -209,8 +209,6 @@ class User(AuthCommonModel, AbstractUser):
         # Check required fields
         if not self.email or not self.email.strip():
             validation_errors.append("Email is required")
-        elif not validators.validate_email(self.email):
-            validation_errors.append("Invalid email format")
 
         if not self.first_name or not self.first_name.strip():
             validation_errors.append("First name is required")

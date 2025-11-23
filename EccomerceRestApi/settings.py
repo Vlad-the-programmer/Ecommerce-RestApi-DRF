@@ -15,7 +15,7 @@ SECRET_KEY = config('SECRET_KEY',
 DEBUG = config('DEBUG', default=False, cast=bool)
 
 ALLOWED_HOSTS = ["*"]
-
+ALLOWED_EMAIL_DOMAINS = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com']
 
 # Application definition
 INSTALLED_APPS = [
@@ -50,10 +50,10 @@ INSTALLED_APPS = [
     # Local apps
     'common.apps.CommonConfig', # Common utils
     'cart.apps.CartConfig',
+    'category.apps.CategoryConfig',
     'products.apps.ProductsConfig',
     'shipping.apps.ShippingConfig',
     'orders.apps.OrdersConfig',
-    'category.apps.CategoryConfig',
     'reviews.apps.ReviewsConfig',
     'wishlist.apps.WishlistConfig',
     'invoices.apps.InvoicesConfig',

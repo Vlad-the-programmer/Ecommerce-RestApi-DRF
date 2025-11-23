@@ -2,13 +2,88 @@ import pytest
 from decimal import Decimal
 from datetime import timedelta, datetime
 from django.utils import timezone
+from django.urls import reverse
 
 from cart.models import Cart, CartItem, Coupon, SavedCart, SavedCartItem
-from products.models import Product
+from products.models import Product, Location
 from category.models import Category
 
-from tests.conftest import authenticated_client, verified_user, client
 
+# URL Fixtures
+
+@pytest.fixture
+def cart_list_url():
+    """URL for cart list endpoint."""
+    return reverse('v1:cart-list')
+
+
+@pytest.fixture
+def cart_detail_url():
+    """URL factory for cart detail endpoint."""
+    def _cart_detail_url(cart_id):
+        return reverse('v1:cart-detail', kwargs={'pk': cart_id})
+    return _cart_detail_url
+
+
+@pytest.fixture
+def cart_apply_coupon_url():
+    """URL factory for apply coupon endpoint."""
+    def _cart_apply_coupon_url(cart_id):
+        return reverse('v1:cart-apply-coupon', kwargs={'pk': cart_id})
+    return _cart_apply_coupon_url
+
+
+@pytest.fixture
+def cart_checkout_url():
+    """URL factory for cart checkout endpoint."""
+    def _cart_checkout_url(cart_id):
+        return reverse('v1:cart-checkout', kwargs={'pk': cart_id})
+    return _cart_checkout_url
+
+
+@pytest.fixture
+def cart_item_list_url():
+    """URL for cart item list endpoint."""
+    return reverse('v1:cartitem-list')
+
+
+@pytest.fixture
+def cart_item_detail_url():
+    """URL factory for cart item detail endpoint."""
+    def _cart_item_detail_url(item_id):
+        return reverse('v1:cartitem-detail', kwargs={'pk': item_id})
+    return _cart_item_detail_url
+
+
+@pytest.fixture
+def coupon_list_url():
+    """URL for coupon list endpoint."""
+    return reverse('v1:coupon-list')
+
+
+@pytest.fixture
+def saved_cart_list_url():
+    """URL for saved cart list endpoint."""
+    return reverse('v1:savedcart-list')
+
+
+@pytest.fixture
+def saved_cart_detail_url():
+    """URL factory for saved cart detail endpoint."""
+    def _saved_cart_detail_url(cart_id):
+        return reverse('v1:savedcart-detail', kwargs={'pk': cart_id})
+    return _saved_cart_detail_url
+
+
+@pytest.fixture
+def saved_cart_restore_url():
+    """URL factory for saved cart restore endpoint."""
+    def _saved_cart_restore_url(cart_id):
+        return reverse('v1:savedcart-restore', kwargs={'pk': cart_id})
+    return _saved_cart_restore_url
+
+
+# Model Factories
 
 @pytest.fixture
 def category_factory(db):
@@ -21,33 +96,90 @@ def category_factory(db):
             'is_active': True
         }
         defaults.update(kwargs)
-        return Category.objects.create(**defaults)
+        # Create the category without using create() to avoid the force_insert issue
+        category = Category(**defaults)
+        category.save()
+        return category
     return _create_category
 
 
 @pytest.fixture
-def product_factory(db, category_factory):
+def location_factory(db):
+    """Create a location factory fixture."""
+    def _create_location(**kwargs):
+        defaults = {
+            'name': 'Test Location',
+            'address_line1': '123 Test St',
+            'city': 'Test City',
+            'postal_code': '12345',
+            'country': 'US',
+            'is_active': True
+        }
+        defaults.update(kwargs)
+        return Location.objects.create(**defaults)
+    return _create_location
+
+
+@pytest.fixture
+def product_factory(db, category_factory, location_factory):
     """Create a product factory fixture."""
     def _create_product(**kwargs):
-        # Get or create a default category if not provided
+        from products.enums import ProductType, ProductCondition, ProductStatus, StockStatus, ProductLabel
+        
+        # Get or create required related objects if not provided
         if 'category' not in kwargs:
             kwargs['category'] = category_factory()
             
+        # Handle product type specific fields
+        product_type = kwargs.get('product_type', ProductType.PHYSICAL)
+        
         defaults = {
-            'name': 'Test Product',
-            'slug': 'test-product',
+            'product_name': 'Test Product',
+            'product_type': product_type,
             'price': Decimal('19.99'),
-            'stock_quantity': 100,
-            'is_active': True,
-            'description': 'Test description',
-            'sku': 'TEST123',
-            'weight': Decimal('1.0'),
-            'length': Decimal('10.0'),
-            'width': Decimal('10.0'),
-            'height': Decimal('10.0'),
+            'compare_at_price': Decimal('29.99'),
+            'product_description': 'Test product description',
+            'condition': ProductCondition.NEW,
+            'status': ProductStatus.PUBLISHED,
+            'stock_status': StockStatus.IN_STOCK,
+            'label': ProductLabel.NONE,
+            'low_stock_threshold': 5,
+            'track_inventory': True,
+            'requires_shipping': True,
+            'sku': f"TEST{timezone.now().strftime('%Y%m%d%H%M%S')}",
+            'weight': Decimal('1.00'),
+            'manufacturing_cost': Decimal('5.00'),
+            'packaging_cost': Decimal('1.00'),
+            'shipping_to_warehouse_cost': Decimal('0.50'),
         }
+        
+        # Add product type specific defaults
+        if product_type == ProductType.DIGITAL:
+            defaults.update({
+                'download_limit': 5,
+                'access_duration': timedelta(days=30),
+                'file_size': 1024 * 1024,  # 1MB
+                'file_type': 'pdf',
+                'requires_shipping': False,
+            })
+        elif product_type == ProductType.SERVICE:
+            defaults.update({
+                'service_type': 'CONSULTATION',
+                'duration': timedelta(hours=1),
+                'location_required': False,
+                'provider_notes': 'Test service notes',
+            })
+            if 'location' not in kwargs:
+                defaults['location'] = location_factory()
+        
+        # Update with any provided kwargs, allowing overrides of defaults
         defaults.update(kwargs)
-        return Product.objects.create(**defaults)
+        
+        # Create the product instance without saving
+        product = Product.objects.create(**{k: v for k, v in defaults.items()
+                           if not k.startswith('_')})
+        
+        return product
     return _create_product
 
 

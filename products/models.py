@@ -900,10 +900,9 @@ class Product(SlugFieldCommonModel):
         ]
         ordering = ['product_name']
 
-
     def save(self, *args, **kwargs):
         # Auto-update stock_status based on variants
-        if self.track_inventory and self.has_variants:
+        if self.track_inventory and getattr(self, "has_variants", False) and self.has_variants:
             total_stock = self.total_stock_quantity
             if total_stock == 0:
                 self.stock_status = StockStatus.OUT_OF_STOCK
@@ -1072,7 +1071,8 @@ class Product(SlugFieldCommonModel):
     @property
     def has_variants(self):
         """Check if product has any active variants"""
-        return self.product_variants.filter(is_deleted=False, is_active=True).exists()
+        return (getattr(self, "product_variants", False) and
+                self.product_variants.filter(is_deleted=False, is_active=True).exists())
 
     @property
     def is_expired(self) -> bool:

@@ -1,7 +1,14 @@
 import logging
-
+import random
+import string
 import pytest
 import uuid
+
+from io import BytesIO
+from PIL import Image
+
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.urls import reverse
 
 from django.utils import timezone
 from django.db.models.signals import post_save
@@ -9,19 +16,13 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
 
-from io import BytesIO
-from PIL import Image
-from django.core.files.uploadedfile import SimpleUploadedFile
-from django.urls import reverse
-import random
-import string
 
 # All auth
 from allauth.account.models import EmailConfirmation, EmailAddress
 
 from userAuth.signals import handle_user_creation
-from users.enums import Gender
-from users.models import Profile
+from users.enums import Gender, UserRole
+from users.models import Profile, UserRoles
 
 
 logger = logging.getLogger(__name__)
@@ -145,6 +146,15 @@ def unverified_user(db, minimal_registration_data):
         password=password,
         is_active=False
     )
+
+    userRole = UserRole.objects.create(
+        user=user,
+        role=UserRole.CUSTOMER
+    )
+
+    user.role = userRole
+    user.save(update_fields=['role', 'date_updated'])
+
     profile = Profile.objects.create(
         user=user,
         phone_number=generate_valid_polish_phone_number(),
@@ -183,6 +193,14 @@ def multiple_verified_users(minimal_registration_data):
                 password='password123',
                 is_active=True
             )
+
+            userRole = UserRole.objects.create(
+                user=user,
+                role=UserRole.CUSTOMER
+            )
+
+            user.role = userRole
+            user.save(update_fields=['role', 'date_updated'])
 
             Profile.objects.create(
                 user=user,
@@ -245,6 +263,15 @@ def existing_user():
                 last_name='User',
                 password='password123'
             )
+
+            userRole = UserRole.objects.create(
+                user=user,
+                role=UserRole.CUSTOMER
+            )
+
+            user.role = userRole
+            user.save(update_fields=['role', 'date_updated'])
+
             Profile.objects.create(
                 user=user,
                 phone_number=phone_number,
@@ -285,7 +312,7 @@ def verified_user(db, minimal_registration_data):
         profile = Profile.objects.create(
             user=user,
             phone_number=generate_valid_polish_phone_number(),
-            date_of_birth='1990-01-01',
+            date_of_birth='1990-01-02',
             gender=Gender.MALE,
             country='US',
             is_active=True
@@ -318,11 +345,25 @@ def verified_user(db, minimal_registration_data):
 def admin_user(db):
     """Create an admin user for testing."""
     user = User.objects.create_superuser(
-        email='admin@example.com',
+        email='admin@gmail.com',
         password='adminpass123',
         first_name='Admin',
         last_name='User'
     )
+
+    # Create profile
+    profile = Profile.objects.create(
+        user=user,
+        phone_number=generate_valid_polish_phone_number(),
+        date_of_birth='1990-01-01',
+        gender=Gender.MALE,
+        country='US',
+        is_active=True
+    )
+
+    profile.is_active = True
+    profile.save(update_fields=['is_active', 'date_updated'])
+
     return user
 
 
