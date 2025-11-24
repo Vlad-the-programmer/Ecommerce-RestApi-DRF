@@ -983,7 +983,7 @@ class Product(SlugFieldCommonModel):
                 return False
 
             logger.debug(f"Product {self.id} has {len(valid_variants)} valid variants")
-        else:
+
             # Simple product stock validation
             if self.track_inventory and not self.total_stock_quantity > 0:
                 logger.warning(f"Product {self.id} is out of stock and track_inventory is enabled")
@@ -1012,22 +1012,23 @@ class Product(SlugFieldCommonModel):
             logger.warning(f"Product {self.id} cannot be deleted: {reason}")
             return can_delete, reason
 
-        # Check for active variants
-        active_variants = self.product_variants.filter(is_deleted=False, is_active=True)
-        if self.has_variants and active_variants.exists():
-            variant_info = ", ".join(str(v.id) for v in active_variants[:3])
-            if active_variants.count() > 3:
-                variant_info += f" and {active_variants.count() - 3} more"
-            message = f"Cannot delete product {self.id} with active variants: {variant_info}"
-            logger.warning(message)
-            return False, message
+        if self.has_variants:
+            # Check for active variants
+            active_variants = self.product_variants.filter(is_deleted=False, is_active=True)
+            if active_variants.exists():
+                variant_info = ", ".join(str(v.id) for v in active_variants[:3])
+                if active_variants.count() > 3:
+                    variant_info += f" and {active_variants.count() - 3} more"
+                message = f"Cannot delete product {self.id} with active variants: {variant_info}"
+                logger.warning(message)
+                return False, message
 
-        # Check variant-specific constraints
-        for variant in active_variants:
-            can_delete, reason = variant.can_be_deleted()
-            if not can_delete:
-                logger.warning(f"Product {self.id} has variant {variant.id} that cannot be deleted: {reason}")
-                return False, f"Variant {variant.id}: {reason}"
+            # Check variant-specific constraints
+            for variant in active_variants:
+                can_delete, reason = variant.can_be_deleted()
+                if not can_delete:
+                    logger.warning(f"Product {self.id} has variant {variant.id} that cannot be deleted: {reason}")
+                    return False, f"Variant {variant.id}: {reason}"
 
         # Check for active promotions
         if hasattr(self, 'coupons'):
@@ -1066,11 +1067,13 @@ class Product(SlugFieldCommonModel):
         """Aggregate stock from all variants"""
         return self.product_variants.filter(
             is_deleted=False, is_active=True
-        ).aggregate(total=models.Sum('stock_quantity'))['total'] or 0
+        ).aggregate(total=models.Sum('stock_quantity'))['total'] if self.has_variants else 0
 
     @property
     def has_variants(self):
         """Check if product has any active variants"""
+        if not self.pk:
+            return False
         return (getattr(self, "product_variants", False) and
                 self.product_variants.filter(is_deleted=False, is_active=True).exists())
 
@@ -1089,7 +1092,7 @@ class Product(SlugFieldCommonModel):
         return self.product_type == ProductType.DIGITAL
 
     @property
-    def days_until_expiry(self) -> int:
+    def days_until_expiry(self) -> int | None:
         """Get number of days until product expires"""
         if not self.manufacturing_date or not self.shelf_life:
             return None
@@ -1166,10 +1169,12 @@ class Product(SlugFieldCommonModel):
             return price_range
         return float(self.price)
 
-    def get_variant_price_range(self):
+    def get_variant_price_range(self) -> dict | None:
         """Calculate min/max prices across all variants"""
-        from django.db.models import Min, Max
+        if not self.has_variants:
+            return None
 
+        from django.db.models import Min, Max
         result = self.product_variants.filter(
             is_deleted=False, is_active=True
         ).aggregate(
@@ -1191,7 +1196,7 @@ class Product(SlugFieldCommonModel):
         """Get all active variants with stock information"""
         return self.product_variants.filter(
             is_deleted=False, is_active=True
-        ).select_related('product')
+        ).select_related('product') if self.has_variants else []
 
     def validate_purchase(self, quantity=1, color=None, size=None):
         """Validate if product can be purchased"""

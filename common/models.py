@@ -799,17 +799,6 @@ class ItemCommonModel(CommonModel):
             if "total_price" not in update_fields:
                 update_fields.append("total_price")
 
-            # If we have update_fields and force_insert is set, convert to force_update
-            if update_fields and 'force_insert' in kwargs:
-                del kwargs['force_insert']
-                kwargs['force_update'] = True
-
-        # Only pass update_fields if it's not empty
-        if update_fields:
-            kwargs['update_fields'] = list(set(update_fields))  # Remove duplicates
-        elif 'update_fields' in kwargs:
-            del kwargs['update_fields']
-
         super().save(*args, **kwargs)
 
 

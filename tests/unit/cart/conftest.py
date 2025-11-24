@@ -176,9 +176,9 @@ def product_factory(db, category_factory, location_factory):
         defaults.update(kwargs)
         
         # Create the product instance without saving
-        product = Product.objects.create(**{k: v for k, v in defaults.items()
-                           if not k.startswith('_')})
-        
+        product = Product.objects.create(**defaults)
+
+        product.refresh_from_db()
         return product
     return _create_product
 
@@ -231,18 +231,24 @@ def coupon_factory(db, product_factory):
             
         defaults = {
             'coupon_code': 'TEST10',
-            'discount_type': 'percentage',
             'discount_amount': Decimal('10.00'),
-            'minimum_order_amount': Decimal('50.00'),
-            'maximum_discount_amount': None,
-            'start_date': timezone.now() - timedelta(days=1),
-            'end_date': timezone.now() + timedelta(days=30),
+            'minimum_cart_amount': Decimal('50.00'),
+            'expiration_date': timezone.now() + timedelta(days=30),
             'is_active': True,
+            'is_expired': False,
             'usage_limit': 100,
             'used_count': 0,
-            'description': 'Test coupon',
+            'label': 'Test coupon',
         }
         defaults.update(kwargs)
+
+        if 'expiration_date' in kwargs and kwargs['expiration_date']:
+            from django.utils.dateparse import parse_datetime
+
+            # Convert string expiration_date to datetime if needed
+            if isinstance(kwargs['expiration_date'], str):
+                defaults['expiration_date'] = parse_datetime(kwargs['expiration_date'])
+
         return Coupon.objects.create(**defaults)
     return _create_coupon
 

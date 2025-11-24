@@ -98,7 +98,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         return None
     
     def get_price_range(self, obj):
-        if obj.has_variants():
+        if obj.has_variants:
             return obj.get_variant_price_range()
         return {'min': obj.price, 'max': obj.price}
 
@@ -126,7 +126,7 @@ class ProductDetailSerializer(ProductListSerializer):
             'manufacturing_date': obj.manufacturing_date,
             'batch_number': obj.batch_number,
             'shelf_life_days': obj.shelf_life.days if obj.shelf_life else None,
-            'days_until_expiry': obj.days_until_expiry()
+            'days_until_expiry': obj.days_until_expiry() or None
         }
 
 

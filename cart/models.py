@@ -22,6 +22,14 @@ class Coupon(CommonModel):
     """
     objects = CouponManager()
 
+    label = models.CharField(
+        max_length=50,
+        db_index=True,
+        null=True,
+        blank=True,
+        verbose_name=_("Label"),
+        help_text=_("Label for this coupon")
+    )
     product = models.ForeignKey(
         "products.Product",
         on_delete=models.PROTECT,
@@ -47,7 +55,7 @@ class Coupon(CommonModel):
         verbose_name=_("Discount Amount (%)"),
         help_text=_("Discount percentage")
     )
-    minimum_amount = models.PositiveIntegerField(
+    minimum_cart_amount = models.PositiveIntegerField(
         default=500,
         verbose_name=_("Minimum Amount"),
         help_text=_("Minimum cart amount required to use this coupon")
@@ -80,10 +88,12 @@ class Coupon(CommonModel):
             models.Index(fields=["coupon_code", "is_deleted", "is_expired"]),
             models.Index(fields=["expiration_date", "is_deleted", "is_expired"]),
             models.Index(fields=["product", "is_deleted", "is_expired"]),
-            models.Index(fields=["minimum_amount", "is_deleted"]),
+            models.Index(fields=["minimum_cart_amount", "is_deleted"]),
 
             # For reporting and analytics
             models.Index(fields=["used_count", "usage_limit"]),
+            models.Index(fields=["label", "is_expired"]),
+            models.Index(fields=["label", "is_deleted", "is_expired"]),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -125,6 +135,7 @@ class Coupon(CommonModel):
 
     def save(self, *args, **kwargs):
         """Auto-update is_expired on save"""
+        import datetime
         if self.expiration_date and self.expiration_date <= timezone.now():
             self.is_expired = True
         super().save(*args, **kwargs)
@@ -153,9 +164,9 @@ class Coupon(CommonModel):
                          f"and Active: {getattr(self.product, 'is_active', 'N/A')} "
                          f"Deleted: {getattr(self.product, 'is_deleted', 'N/A')}")
             return False
-        if cart_total is not None and cart_total < self.minimum_amount:
+        if cart_total is not None and cart_total < self.minimum_cart_amount:
             logger.debug(f"Coupon validation failed: cart_total ({cart_total}) is less \ "
-                         f"than minimum_amount ({self.minimum_amount})")
+                         f"than minimum_cart_amount ({self.minimum_cart_amount})")
             return False
         return True
 

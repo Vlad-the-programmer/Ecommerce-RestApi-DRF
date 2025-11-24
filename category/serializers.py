@@ -119,13 +119,25 @@ class CategoryTreeSerializer(serializers.ModelSerializer):
         return CategoryTreeSerializer(children, many=True).data
 
 
-class CategoryBulkCreateSerializer(serializers.ListSerializer):
+class CategoryBulkCreateSerializer(serializers.ModelSerializer):
     """
-    Handles bulk creation of categories.
+    Serializer for creating a single category.
+    Used as the child serializer for bulk operations.
     """
-    def create(self, validated_data):
-        categories = [Category(**item) for item in validated_data]
-        return Category.objects.bulk_create(categories)
+    class Meta:
+        model = Category
+        fields = ['name', 'description', 'parent', 'is_active']
+        extra_kwargs = {
+            'name': {'required': True},
+            'description': {'required': False, 'allow_blank': True},
+            'parent': {'required': False, 'allow_null': True},
+            'is_active': {'required': False, 'default': True}
+        }
+    
+    def validate(self, data):
+        """Validate the category data."""
+        # Add any custom validation here if needed
+        return data
 
 
 class CategoryBulkUpdateSerializer(serializers.Serializer):

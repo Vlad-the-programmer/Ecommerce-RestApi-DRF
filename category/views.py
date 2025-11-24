@@ -85,8 +85,27 @@ class CategoryViewSet(ModelViewSet):
     def bulk_create(self, request):
         """
         Bulk create categories.
+        Expected payload format:
+        {
+            "categories": [
+                {"name": "Category 1", "description": "Desc 1"},
+                {"name": "Category 2", "parent": 1, "is_active": true}
+            ]
+        }
         """
-        serializer = self.get_serializer(data=request.data)
+        if not isinstance(request.data.get('categories'), list):
+            return Response(
+                {'error': 'Expected a list of categories in the "categories" field'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # Use the regular serializer with many=True for bulk create
+        serializer = CategoryBulkCreateSerializer(
+            data=request.data['categories'], 
+            many=True,
+            context=self.get_serializer_context()
+        )
+        
         serializer.is_valid(raise_exception=True)
         try:
             with transaction.atomic():
@@ -100,22 +119,43 @@ class CategoryViewSet(ModelViewSet):
                 {'error': str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
+            
     @action(detail=False, methods=['put', 'patch'])
     def bulk_update(self, request):
         """
         Bulk update categories.
+        Expected payload format:
+        {
+            "ids": [1, 2, 3],
+            "is_active": false
+        }
         """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         
         try:
-            with transaction.atomic():
-                updated_count = serializer.save()
-            return Response(
-                {'updated_count': updated_count},
-                status=status.HTTP_200_OK
-            )
+            # Get the update data (all fields except 'ids')
+            update_data = {
+                k: v for k, v in serializer.validated_data.items()
+                if k != 'ids'
+            }
+
+            if not update_data:
+                return Response(
+                    {'error': 'No fields to update'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Update the categories
+            updated_count = Category.objects.filter(
+                id__in=serializer.validated_data['ids']
+            ).update(**update_data)
+
+            return Response({
+                'updated_count': updated_count,
+                'detail': f'Successfully updated {updated_count} categories.'
+            }, status=status.HTTP_200_OK)
+                
         except Exception as e:
             return Response(
                 {'error': str(e)},

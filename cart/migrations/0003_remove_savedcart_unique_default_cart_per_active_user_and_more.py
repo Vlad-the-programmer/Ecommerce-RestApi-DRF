@@ -49,7 +49,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AlterField(
             model_name='coupon',
-            name='minimum_amount',
+            name='minimum_cart_amount',
             field=models.PositiveIntegerField(default=500, help_text='Minimum cart amount required to use this coupon', verbose_name='Minimum Amount'),
         ),
         migrations.AlterField(
@@ -73,7 +73,7 @@ class Migration(migrations.Migration):
         ),
         migrations.AddIndex(
             model_name='coupon',
-            index=models.Index(fields=['minimum_amount', 'is_deleted'], name='coupons_minimum_1d740e_idx'),
+            index=models.Index(fields=['minimum_cart_amount', 'is_deleted'], name='coupons_minimum_1d740e_idx'),
         ),
         migrations.AddIndex(
             model_name='coupon',

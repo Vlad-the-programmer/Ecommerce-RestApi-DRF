@@ -14,6 +14,11 @@ class ApplyCouponSerializer(serializers.Serializer):
 class CartItemSerializer(serializers.ModelSerializer):
     """Serializer for cart items."""
     product = ProductDetailSerializer(read_only=True)
+    cart_id = serializers.PrimaryKeyRelatedField(
+        queryset=Cart.objects.filter(is_active=True, is_deleted=False),
+        write_only=True,
+        source='cart'
+    )
     product_id = serializers.PrimaryKeyRelatedField(
         queryset=Product.objects.filter(is_active=True, is_deleted=False),
         write_only=True,
@@ -28,21 +33,15 @@ class CartItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = CartItem
         fields = [
-            'id', 'product', 'product_id', 'quantity', 'price', 
+            'id', 'product', 'product_id', 'cart_id', 'quantity',
             'total_price', 'date_created', 'date_updated'
         ]
-        read_only_fields = ['price', 'date_created', 'date_updated']
+        read_only_fields = ['date_created', 'date_updated']
 
     def validate_quantity(self, value):
         if value < 1:
             raise serializers.ValidationError("Quantity must be at least 1.")
         return value
-
-    def create(self, validated_data):
-        # Set the price from the product if not provided
-        if 'price' not in validated_data:
-            validated_data['price'] = validated_data['product'].price
-        return super().create(validated_data)
 
 
 class CartSerializer(serializers.ModelSerializer):
@@ -103,7 +102,7 @@ class CouponSerializer(serializers.ModelSerializer):
     class Meta:
         model = Coupon
         fields = [
-            'id', 'coupon_code', 'discount_amount', 'minimum_amount',
+            'id', 'coupon_code', 'discount_amount', 'minimum_cart_amount',
             'expiration_date', 'usage_limit', 'used_count', 'is_expired',
             'is_valid', 'product', 'product_id', 'date_created', 'date_updated'
         ]

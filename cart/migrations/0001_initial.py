@@ -66,7 +66,7 @@ class Migration(migrations.Migration):
                 ('coupon_code', models.CharField(max_length=10)),
                 ('is_expired', models.BooleanField(default=False)),
                 ('discount_amount', models.PositiveIntegerField(default=100, help_text='Discount in %(s)')),
-                ('minimum_amount', models.PositiveIntegerField(default=500, help_text='Minimum amount required to use this coupon')),
+                ('minimum_cart_amount', models.PositiveIntegerField(default=500, help_text='Minimum amount required to use this coupon')),
                 ('expiration_date', models.DateTimeField()),
                 ('usage_limit', models.PositiveIntegerField(default=1, help_text='Number of times this coupon can be used')),
                 ('used_count', models.PositiveIntegerField(default=0, help_text='Number of times this coupon has been used')),

@@ -53,7 +53,7 @@ class CouponManager(SoftDeleteManager):
 
     def valid_for_amount(self, amount):
         """Get coupons valid for specified cart amount"""
-        return self.get_queryset().filter(minimum_amount__lte=amount)
+        return self.get_queryset().filter(minimum_cart_amount__lte=amount)
 
     def by_code(self, code):
         """Get coupon by code (case-insensitive)"""

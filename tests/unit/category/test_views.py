@@ -17,13 +17,13 @@ class TestCategoryListViewSet:
         """Test listing categories."""
         response = client.get(category_list_url)
         assert response.status_code == status.HTTP_200_OK
-        assert len(response.data) == 1
+        assert len(response.data['results']) == 1  # Check the results in the paginated response
         
     def test_list_root_categories(self, client, create_category_tree, category_list_url):
         """Test listing only root categories."""
         response = client.get(f"{category_list_url}?parent=root")
         assert response.status_code == status.HTTP_200_OK
-        assert len(response.data) == 2  # Should only return root categories
+        assert len(response.data['results']) == 2  # Should only return root categories
         
     def test_create_category(self, client, admin_client, category_data, category_list_url):
         """Test creating a new category."""
