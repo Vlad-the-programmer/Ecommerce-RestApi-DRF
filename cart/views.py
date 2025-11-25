@@ -101,24 +101,29 @@ class CartItemViewSet(viewsets.ModelViewSet):
             cart__status=CART_STATUSES.ACTIVE,
             is_deleted=False
         ).select_related('product', 'cart')
-    
-    def perform_create(self, serializer):
-        """Set the cart to the user's active cart or create a new one."""
+
+    def _get_cart_item_and_cart(self, validated_data):
         cart, _ = Cart.objects.get_or_create(
             user=self.request.user,
             status=CART_STATUSES.ACTIVE,
             defaults={'user': self.request.user}
         )
-        
+
         # Check if item already exists in cart
-        product = serializer.validated_data['product']
-        quantity = serializer.validated_data.get('quantity', 1)
-        
-        cart_item = cart.cart_items.filter(
+        product = validated_data['product']
+
+        return cart.cart_items.filter(
             product=product,
+            cart=cart,
             is_deleted=False
-        ).first()
-        
+        ).first(), cart
+
+    def perform_create(self, serializer):
+        """Set the cart to the user's active cart or create a new one."""
+        quantity = serializer.validated_data.get('quantity', 1)
+
+        cart_item, cart = self._get_cart_item_and_cart(serializer.validated_data)
+
         if cart_item:
             # Update quantity if item exists
             cart_item.quantity += quantity
@@ -126,6 +131,20 @@ class CartItemViewSet(viewsets.ModelViewSet):
         else:
             # Create new cart item
             serializer.save(cart=cart)
+
+    def perform_destroy(self, instance):
+        serializer = self.get_serializer(instance)
+        serializer.is_valid(raise_exception=True)
+
+        quantity = serializer.validated_data.get('quantity', 1)
+        cart_item, cart = self._get_cart_item_and_cart(serializer.validated_data)
+
+        if cart_item:
+            # Update quantity if item exists
+            cart_item.quantity -= quantity
+            cart_item.save()
+        else:
+            instance.delete()
 
 
 class CouponViewSet(viewsets.ModelViewSet):

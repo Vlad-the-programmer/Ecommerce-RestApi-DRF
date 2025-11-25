@@ -278,7 +278,8 @@ class CartItem(ItemCommonModel):
     """
     objects = CartItemManager()
 
-    cart = models.ForeignKey(Cart, on_delete=models.PROTECT, related_name="cart_items")
+    cart = models.ForeignKey(Cart, on_delete=models.PROTECT,
+                             null=True, blank=True, related_name="cart_items")
 
     def __str__(self):
         product_name = getattr(self.product, 'product_name', 'Unknown Product')
@@ -330,7 +331,7 @@ class CartItem(ItemCommonModel):
         # Check if cart is valid
         if not hasattr(self, 'cart') or not self.cart or self.cart.is_deleted:
             logger.debug(f"Cart items validation failed. Cart is deleted: \
-                            {self.cart.is_deleted if self.cart and hasattr(self, 'cart')  else None} \
+                            {self.cart.is_deleted if hasattr(self, 'cart') and self.cart  else None} \
                             Cart is None: {self.cart is None} \
                             Cart has attribute 'cart': {hasattr(self, 'cart')}")
             return False

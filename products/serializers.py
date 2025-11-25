@@ -126,7 +126,7 @@ class ProductDetailSerializer(ProductListSerializer):
             'manufacturing_date': obj.manufacturing_date,
             'batch_number': obj.batch_number,
             'shelf_life_days': obj.shelf_life.days if obj.shelf_life else None,
-            'days_until_expiry': obj.days_until_expiry() or None
+            'days_until_expiry': obj.days_until_expiry or None
         }
 
 

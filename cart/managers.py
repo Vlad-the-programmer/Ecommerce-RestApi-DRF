@@ -46,7 +46,6 @@ class CouponManager(SoftDeleteManager):
 
     def get_queryset(self):
         return super().get_queryset().filter(
-            is_deleted=False,
             is_expired=False,
             expiration_date__gt=timezone.now()
         )

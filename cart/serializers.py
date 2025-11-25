@@ -14,10 +14,9 @@ class ApplyCouponSerializer(serializers.Serializer):
 class CartItemSerializer(serializers.ModelSerializer):
     """Serializer for cart items."""
     product = ProductDetailSerializer(read_only=True)
-    cart_id = serializers.PrimaryKeyRelatedField(
-        queryset=Cart.objects.filter(is_active=True, is_deleted=False),
-        write_only=True,
-        source='cart'
+    cart_id = serializers.UUIDField(
+        read_only=True,
+        source='cart__id'
     )
     product_id = serializers.PrimaryKeyRelatedField(
         queryset=Product.objects.filter(is_active=True, is_deleted=False),
@@ -36,13 +35,12 @@ class CartItemSerializer(serializers.ModelSerializer):
             'id', 'product', 'product_id', 'cart_id', 'quantity',
             'total_price', 'date_created', 'date_updated'
         ]
-        read_only_fields = ['date_created', 'date_updated']
+        read_only_fields = ['date_created', 'cart_id', 'date_updated']
 
     def validate_quantity(self, value):
         if value < 1:
             raise serializers.ValidationError("Quantity must be at least 1.")
         return value
-
 
 class CartSerializer(serializers.ModelSerializer):
     """Serializer for shopping carts."""

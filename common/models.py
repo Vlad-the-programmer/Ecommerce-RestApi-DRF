@@ -710,7 +710,7 @@ class ItemCommonModel(CommonModel):
                 return Decimal(str(price)) if price else Decimal('0.0')
 
             # Fallback to stored price or zero
-            return self.total_price / Decimal(str(self.quantity)) if self.quantity > 0 else Decimal('0.0')
+            return Decimal(self.total_price) / Decimal(str(self.quantity)) if self.quantity > 0 else Decimal('0.0')
 
         except (AttributeError, ValueError, ZeroDivisionError):
             return Decimal('0.0')
