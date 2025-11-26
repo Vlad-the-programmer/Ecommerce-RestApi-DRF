@@ -42,6 +42,7 @@ class CartItemSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Quantity must be at least 1.")
         return value
 
+
 class CartSerializer(serializers.ModelSerializer):
     """Serializer for shopping carts."""
     items = CartItemSerializer(many=True, read_only=True)
@@ -173,11 +174,18 @@ class SavedCartSerializer(serializers.ModelSerializer):
             # If this is a new cart and is_default is True, or if we're updating an existing cart to be default
             if attrs.get('is_default', False):
                 # Unset any other default carts for this user
-                SavedCart.objects.filter(
+                # Get the queryset of carts to update
+                carts_to_update = SavedCart.objects.filter(
                     user=self.context['user'],
                     is_default=True
-                ).exclude(pk=self.instance.pk if self.instance else None).update(is_default=False)
-        
+                ).exclude(pk=self.instance.pk if self.instance else None)
+
+                for cart in carts_to_update:
+                    cart.is_default = False
+
+                if carts_to_update.exists():
+                    SavedCart.objects.bulk_update(carts_to_update, fields=['is_default'])
+
         return attrs
     
     def create(self, validated_data):

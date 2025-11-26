@@ -13,8 +13,8 @@ class CartManager(SoftDeleteManager):
     """
 
     def active(self):
-        """Get active carts (default for most operations)"""
-        return self.get_queryset().filter(status=CART_STATUSES.ACTIVE)
+        """Get active carts"""
+        return super().active().filter(status=CART_STATUSES.ACTIVE)
 
     def abandoned(self, days_old=7):
         """Get abandoned carts (older than specified days)"""
@@ -44,11 +44,13 @@ class CouponManager(SoftDeleteManager):
     Manager for Coupon model that excludes deleted and expired coupons by default.
     """
 
-    def get_queryset(self):
-        return super().get_queryset().filter(
-            is_expired=False,
-            expiration_date__gt=timezone.now()
-        )
+    def active(self):
+        """Get active coupons"""
+        return super().active().filter(is_expired=False, expiration_date__gt=timezone.now())
+
+    def with_expired(self):
+        """Get expired coupons"""
+        return self.with_deleted().filter(is_expired=True)
 
     def valid_for_amount(self, amount):
         """Get coupons valid for specified cart amount"""
@@ -68,6 +70,14 @@ class CartItemManager(SoftDeleteManager):
     Manager for CartItem model with item-specific methods.
     """
 
+    def get_queryset(self):
+        """Get active cart items"""
+        return super().get_queryset().filter()
+
+    def active(self):
+        """Get active cart items"""
+        return super().active().filter(status=CART_STATUSES.ACTIVE)
+
     def for_cart(self, cart_id):
         """Get all items for specific cart"""
         return self.get_queryset().filter(cart_id=cart_id)
@@ -85,6 +95,10 @@ class SavedCartManager(SoftDeleteManager):
     """
     Manager for SavedCart model with saved cart specific methods.
     """
+
+    def active(self):
+        """Get active saved carts"""
+        return super().active().filter(expires_at__gt=timezone.now())
 
     def for_user(self, user):
         """Get all saved carts for user"""

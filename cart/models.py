@@ -257,7 +257,7 @@ class Cart(CommonModel):
         total_price = 0
 
         for cart_item in cart_items:
-            total_price += cart_item.get_total_cart_item_price()
+            total_price += cart_item.total_price
 
         return total_price
 
@@ -270,6 +270,11 @@ class Cart(CommonModel):
             total -= discount
 
         return max(total, 0)  # Ensure non-negative total
+
+    def get_cart_total_quantity(self):
+        return self.cart_items.aggregate(
+            total_quantity=models.Sum('quantity')
+        )['total_quantity'] or 0
 
 
 class CartItem(ItemCommonModel):
@@ -553,9 +558,6 @@ class SavedCart(CommonModel):
 
     def save(self, *args, **kwargs):
         """Override save to handle default cart logic."""
-        # If this is being set as default, unset other defaults
-        if self.is_default and hasattr(self, 'user'):
-            self.user.saved_carts.filter(is_default=True).exclude(pk=self.pk).update(is_default=False)
 
         # If this is the first cart, make it default
         if hasattr(self, 'user') and not self.user.saved_carts.exists():
@@ -563,20 +565,6 @@ class SavedCart(CommonModel):
 
         super().save(*args, **kwargs)
         logger.info(f"SavedCart {self.pk} saved for user {self.user_id}")
-
-    @property
-    def item_count(self) -> int:
-        """Return the total number of items in the cart."""
-        if not isinstance(self.cart_data, dict) or 'items' not in self.cart_data:
-            return 0
-        return len(self.cart_data['items'])
-
-    @property
-    def total_quantity(self) -> int:
-        """Return the total quantity of all items in the cart."""
-        if not isinstance(self.cart_data, dict) or 'items' not in self.cart_data:
-            return 0
-        return sum(item.get('quantity', 0) for item in self.cart_data['items'])
 
     def restore_to_cart(self, user):
         """Restore this saved cart to an active cart for the user."""
@@ -604,7 +592,7 @@ class SavedCart(CommonModel):
         return cart
 
 
-class SavedCartItem(CommonModel):
+class SavedCartItem(ItemCommonModel):
     """
     Individual items within a saved cart.
     Normalized to store product snapshot and quantity.
@@ -622,19 +610,6 @@ class SavedCartItem(CommonModel):
         related_name='saved_cart_items',
         verbose_name=_('Product'),
         help_text=_('Product in the saved cart')
-    )
-    quantity = models.PositiveIntegerField(
-        _('Quantity'),
-        default=1,
-        validators=[MinValueValidator(1)],
-        help_text=_('Quantity of the product')
-    )
-    price = models.DecimalField(
-        _('Price at Save'),
-        max_digits=10,
-        decimal_places=2,
-        validators=[MinValueValidator(Decimal('0.00'))],
-        help_text=_('Price of the product when cart was saved')
     )
     product_snapshot = models.JSONField(
         _('Product Snapshot'),
@@ -661,21 +636,12 @@ class SavedCartItem(CommonModel):
             models.Index(fields=['saved_cart', 'is_deleted']),
             models.Index(fields=['product', 'is_deleted']),
 
-            # Price and quantity queries
-            models.Index(fields=['price']),
-            models.Index(fields=['quantity']),
-
             # Combined cart and status queries
             models.Index(fields=['saved_cart', 'is_active', 'is_deleted']),
         ]
 
     def __str__(self):
         return f"{self.product.product_name} x {self.quantity} in {self.saved_cart.name}"
-
-    @property
-    def total_price(self):
-        """Calculate total price for this cart item."""
-        return self.price * self.quantity
 
     def save(self, *args, **kwargs):
         """Override save to capture product snapshot."""

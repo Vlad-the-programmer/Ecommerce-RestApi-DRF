@@ -6,9 +6,6 @@ class CategoryManager(models.Manager):
     Simple manager for Category model with soft deletion support.
     """
 
-    def get_queryset(self):
-        return super().get_queryset().filter(is_deleted=False)
-
     def root_categories(self):
         """Get all root categories (no parent)"""
         return self.get_queryset().filter(parent__isnull=True)

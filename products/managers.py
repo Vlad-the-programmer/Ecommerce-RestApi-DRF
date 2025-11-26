@@ -1,9 +1,9 @@
-from datetime import timezone
-
-from django.db import models
-from django.db.models import Count, Q, Avg
+import datetime
+from django.utils import timezone
+from django.db.models import Count, Q, Avg, Sum, F
 
 from common.managers import SoftDeleteManager
+from common.models import CommonModel
 from products.enums import ProductStatus, StockStatus, ProductLabel
 
 
@@ -12,7 +12,7 @@ class ProductVariantManager(SoftDeleteManager):
     Manager for size-color variant queries.
     """
     def get_queryset(self):
-        return super().get_queryset().filter(is_active=True).select_related('product')
+        return super().get_queryset().select_related('product')
 
 
 class ProductManager(SoftDeleteManager):
@@ -20,8 +20,12 @@ class ProductManager(SoftDeleteManager):
     Main product manager with common product queries.
     """
     def get_queryset(self):
-        return super().get_queryset().filter(status=ProductStatus.PUBLISHED, is_active=True)
-
+        return super().get_queryset().filter(status=ProductStatus.PUBLISHED)
+    
+    def active(self):
+        """Get only active products"""
+        return self.filter(status=ProductStatus.PUBLISHED)
+    
     def published(self):
         """Get only published products"""
         return self.filter(status=ProductStatus.PUBLISHED)
@@ -42,7 +46,7 @@ class ProductManager(SoftDeleteManager):
         """Get products currently on sale"""
         now = timezone.now()
         return self.filter(
-            compare_at_price__gt=models.F('price'),
+            compare_at_price__gt=F('price'),
             sale_start_date__lte=now,
             sale_end_date__gte=now
         )
@@ -66,13 +70,13 @@ class ProductManager(SoftDeleteManager):
     def low_stock(self):
         """Get products with low stock levels"""
         return self.filter(
-            stock_quantity__lte=models.F('low_stock_threshold'),
+            stock_quantity__lte=F('low_stock_threshold'),
             stock_status=StockStatus.IN_STOCK
         )
 
     def by_category(self, category):
         """Get products by category (can accept category object or ID)"""
-        if isinstance(category, models.Model):
+        if isinstance(category, CommonModel):
             return self.filter(category=category)
         return self.filter(category_id=category)
 
@@ -80,7 +84,7 @@ class ProductManager(SoftDeleteManager):
         """Get products with positive profit margin"""
         return self.filter(
             cost_price__isnull=False,
-            price__gt=models.F('cost_price')
+            price__gt=F('cost_price')
         )
 
     def search(self, query):
@@ -109,17 +113,18 @@ class ProductReportManager(SoftDeleteManager):
             cost_price__isnull=False
         ).annotate(
             profit_margin=(
-                (models.F('price') - models.F('cost_price')) /
-                models.F('price') * 100
+                (F('price') - F('cost_price')) /
+                F('price') * 100
             )
         )
 
     def inventory_value(self):
         """Calculate total inventory value"""
+        from django.db.models import DecimalField
         return self.aggregate(
-            total_value=models.Sum(
-                models.F('cost_price') * models.F('stock_quantity'),
-                output_field=models.DecimalField()
+            total_value=Sum(
+                F('cost_price') * F('stock_quantity'),
+                output_field=DecimalField()
             )
         )
 
@@ -132,7 +137,7 @@ class ProductAdminManager(SoftDeleteManager):
         """Get products that need admin attention"""
         return self.filter(
             Q(stock_quantity=0) |
-            Q(stock_quantity__lte=models.F('low_stock_threshold')) |
+            Q(stock_quantity__lte=F('low_stock_threshold')) |
             Q(status=ProductStatus.DRAFT) |
             Q(cost_price__isnull=True)
         )
@@ -146,5 +151,5 @@ class ProductAdminManager(SoftDeleteManager):
 
     def recently_updated(self, hours=24):
         """Get products updated in the last N hours"""
-        cutoff = timezone.now() - timezone.timedelta(hours=hours)
+        cutoff = timezone.now() - datetime.timedelta(hours=hours)
         return self.filter(date_updated__gte=cutoff)

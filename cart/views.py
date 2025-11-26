@@ -43,8 +43,6 @@ class CartViewSet(viewsets.ModelViewSet):
         try:
             coupon = Coupon.objects.get(
                 coupon_code=serializer.validated_data['coupon_code'],
-                is_deleted=False,
-                is_expired=False,
                 expiration_date__gt=timezone.now()
             )
             
@@ -99,7 +97,6 @@ class CartItemViewSet(viewsets.ModelViewSet):
         return CartItem.objects.filter(
             cart__user=self.request.user,
             cart__status=CART_STATUSES.ACTIVE,
-            is_deleted=False
         ).select_related('product', 'cart')
 
     def _get_cart_item_and_cart(self, validated_data):
@@ -177,7 +174,6 @@ class SavedCartViewSet(viewsets.ModelViewSet):
         """Return only the current user's saved carts."""
         return SavedCart.objects.filter(
             user=self.request.user,
-            is_deleted=False
         ).prefetch_related('items')
     
     def perform_create(self, serializer):
@@ -207,13 +203,10 @@ class SavedCartViewSet(viewsets.ModelViewSet):
         cart.cart_items.all().delete()
         
         # Add items from saved cart to active cart
-        for item in saved_cart.items.all():
-            CartItem.objects.create(
-                cart=cart,
-                product=item.product,
-                quantity=item.quantity,
-                price=item.price
-            )
+        CartItem.objects.bulk_create(
+            saved_cart.items.all(),
+            update_fields=["cart", "product", "quantity", "price"]
+        )
         
         return Response({
             'message': 'Cart restored successfully',
@@ -232,14 +225,15 @@ class SavedCartItemViewSet(viewsets.ModelViewSet):
         """Return only items in the current user's saved carts."""
         return SavedCartItem.objects.filter(
             saved_cart__user=self.request.user,
-            is_deleted=False
         ).select_related('product', 'saved_cart')
     
     def perform_create(self, serializer):
         """Ensure the saved cart belongs to the current user."""
         saved_cart = serializer.validated_data['saved_cart']
         if saved_cart.user != self.request.user:
-            raise permissions.exceptions.PermissionDenied("You do not have permission to add items to this cart.")
+            raise permissions.exceptions.PermissionDenied(
+                "You do not have permission to add items to this cart."
+            )
         
         # Set price from product if not provided
         if 'price' not in serializer.validated_data:

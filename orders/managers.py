@@ -11,30 +11,29 @@ class OrderManager(SoftDeleteManager):
     Custom manager for Order model with order-specific methods.
     """
 
-    # Status-based filters
     def pending(self):
         from .enums import OrderStatuses
         return self.get_queryset().filter(status=OrderStatuses.PENDING)
 
     def completed(self):
         from .enums import OrderStatuses
-        return self.get_queryset().filter(status=OrderStatuses.COMPLETED)
+        return self.with_deleted().filter(status=OrderStatuses.COMPLETED)
 
     def cancelled(self):
         from .enums import OrderStatuses
-        return self.get_queryset().filter(status=OrderStatuses.CANCELLED)
+        return self.with_deleted().filter(status=OrderStatuses.CANCELLED)
 
     def refunded(self):
         from .enums import OrderStatuses
-        return self.get_queryset().filter(status=OrderStatuses.REFUNDED)
+        return self.with_deleted().filter(status=OrderStatuses.REFUNDED)
 
     def shipped(self):
         from .enums import OrderStatuses
-        return self.get_queryset().filter(status=OrderStatuses.SHIPPED)
+        return self.with_deleted().filter(status=OrderStatuses.SHIPPED)
 
     def delivered(self):
         from .enums import OrderStatuses
-        return self.get_queryset().filter(status=OrderStatuses.DELIVERED)
+        return self.with_deleted().filter(status=OrderStatuses.DELIVERED)
 
     def paid(self):
         from .enums import OrderStatuses
@@ -58,7 +57,6 @@ class OrderManager(SoftDeleteManager):
     def by_order_number(self, order_number):
         return self.get_queryset().filter(order_number=order_number).first()
 
-    # Date-based queries
     def recent(self, days=30):
         cutoff_date = timezone.now() - timedelta(days=days)
         return self.get_queryset().filter(date_created__gte=cutoff_date)
@@ -67,7 +65,6 @@ class OrderManager(SoftDeleteManager):
         today = timezone.now().date()
         return self.get_queryset().filter(date_created__date=today)
 
-    # Analytics
     def total_revenue(self):
         result = self.get_queryset().aggregate(total=Sum('total_amount'))
         return result['total'] or Decimal('0.00')
@@ -82,6 +79,10 @@ class OrderItemManager(SoftDeleteManager):
     """
     Manager for OrderItem model.
     """
+
+    def with_active_orders(self):
+        from .enums import active_order_statuses
+        return self.get_queryset().filter(order__status__in=active_order_statuses)
 
     def for_order(self, order):
         return self.get_queryset().filter(order=order)

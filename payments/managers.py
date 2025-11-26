@@ -1,5 +1,3 @@
-# payments/managers.py
-from django.db import models
 from django.db.models import Sum, Count, Avg, Q
 from django.utils import timezone
 from datetime import timedelta
@@ -15,7 +13,6 @@ class PaymentManager(SoftDeleteManager):
     Inherits from your base SoftDeleteManager.
     """
 
-    # Payment Status Methods
     def successful(self):
         """Get all successful payments"""
         from .enums import PaymentStatus
@@ -29,17 +26,17 @@ class PaymentManager(SoftDeleteManager):
     def failed(self):
         """Get all failed payments"""
         from .enums import PaymentStatus
-        return self.get_queryset().filter(status=PaymentStatus.FAILED)
+        return self.with_deleted().filter(status=PaymentStatus.FAILED)
 
     def refunded(self):
         """Get all refunded payments"""
         from .enums import PaymentStatus
-        return self.get_queryset().filter(status=PaymentStatus.REFUNDED)
+        return self.with_deleted().filter(status=PaymentStatus.REFUNDED)
 
     def cancelled(self):
         """Get all cancelled payments"""
         from .enums import PaymentStatus
-        return self.get_queryset().filter(status=PaymentStatus.CANCELLED)
+        return self.with_deleted().filter(status=PaymentStatus.CANCELLED)
 
     # Payment Method Filters
     def by_method(self, method):
@@ -61,7 +58,6 @@ class PaymentManager(SoftDeleteManager):
         from .enums import PaymentMethod
         return self.by_method(PaymentMethod.BANK_TRANSFER)
 
-    # User and Invoice Related
     def for_user(self, user):
         """Get all payments for a specific user"""
         return self.get_queryset().filter(user=user)
@@ -74,7 +70,6 @@ class PaymentManager(SoftDeleteManager):
         """Get payments by invoice number"""
         return self.get_queryset().filter(invoice__invoice_number=invoice_number)
 
-    # Date-Based Queries
     def today(self):
         """Get payments from today"""
         today = timezone.now().date()
@@ -109,7 +104,6 @@ class PaymentManager(SoftDeleteManager):
             transaction_date__gte=cutoff_date
         )
 
-    # Amount-Based Queries
     def above_amount(self, amount):
         """Get payments above specified amount"""
         return self.get_queryset().filter(amount__gte=amount)
@@ -125,7 +119,6 @@ class PaymentManager(SoftDeleteManager):
             amount__lte=max_amount
         )
 
-    # Currency-Based Queries
     def in_currency(self, currency):
         """Get payments in specific currency"""
         return self.get_queryset().filter(currency=currency)
@@ -138,7 +131,6 @@ class PaymentManager(SoftDeleteManager):
         """Get all EUR payments"""
         return self.in_currency('EUR')
 
-    # Analytics and Reporting Methods
     def total_amount(self, **filters):
         """Calculate total amount of payments with optional filters"""
         queryset = self.get_queryset().filter(**filters)
@@ -194,7 +186,6 @@ class PaymentManager(SoftDeleteManager):
             payment_count=Count('id')
         ).order_by('month')
 
-    # Business Logic Methods
     def get_by_reference(self, reference):
         """Get payment by reference number"""
         return self.get_queryset().filter(payment_reference=reference).first()
@@ -227,11 +218,14 @@ class PaymentManager(SoftDeleteManager):
             transaction_date__lt=cutoff_time
         )
 
-    def mark_old_pending_as_failed(self, hours=24):
+    def mark_old_pendings_as_failed(self, hours=24):
         """Mark old pending payments as failed"""
-        old_pending = self.get_pending_payments_older_than(hours)
-        count = old_pending.update(status=PaymentStatus.FAILED)
-        return count
+        old_pendings = self.get_pending_payments_older_than(hours)
+        for payment in old_pendings:
+            payment.status = PaymentStatus.FAILED
+
+        self.bulk_update(old_pendings, fields=["status"])
+        return old_pendings.count()
 
     # Performance Optimized Queries
     def with_invoice_details(self):

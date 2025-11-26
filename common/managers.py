@@ -4,7 +4,11 @@ from django.db import models
 class SoftDeleteManager(models.Manager):
     """Default queryset excludes soft deleted objects."""
     def get_queryset(self):
-        return super().get_queryset().filter(is_deleted=False)
+        return super().get_queryset().filter(is_deleted=False, is_active=True)
+
+    def active(self):
+        """Get active objects"""
+        return self.get_queryset().filter(is_active=True)
 
     def with_deleted(self):
         """Return all objects including soft-deleted ones"""

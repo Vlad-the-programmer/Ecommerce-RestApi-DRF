@@ -11,7 +11,6 @@ class InvoiceManager(SoftDeleteManager):
     """
     Custom manager for Invoice model with essential invoice methods.
     """
-    # Status-based filters
     def draft(self):
         from .enums import InvoiceStatus
         return self.get_queryset().filter(status=InvoiceStatus.DRAFT)
@@ -66,6 +65,7 @@ class InvoiceManager(SoftDeleteManager):
 
     def get_by_status(self):
         """Get count of invoices by status"""
+        from django.db.models import Count
         return self.get_queryset().values('status').annotate(
             count=Count('id'),
             total_amount=Sum('total_amount')

@@ -12,7 +12,7 @@ class WarehouseManager(SoftDeleteManager):
 
     def operational(self):
         """Get all operational warehouses"""
-        return self.get_queryset().filter(is_operational=True)
+        return super().get_queryset().filter(is_operational=True)
 
     def available_for_fulfillment(self):
         """Get warehouses available for order fulfillment"""
@@ -140,8 +140,6 @@ class WarehouseManager(SoftDeleteManager):
             id__in=order_ids,
             status__in=active_order_statuses
         ).distinct().order_by('-date_created')
-
-
 
 class InventoryManager(SoftDeleteManager):
     """

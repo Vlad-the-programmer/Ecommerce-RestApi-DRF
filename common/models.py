@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Optional
 
 from django.conf import settings
+from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.utils import timezone
 from django.utils.text import slugify
@@ -505,7 +506,8 @@ class ItemCommonModel(CommonModel):
     )
     quantity = models.PositiveIntegerField(
         help_text=_("Quantity of the product"),
-        default=1
+        default=1,
+        validators=[MinValueValidator(1)],
     )
     total_price = models.DecimalField(
         max_digits=10,
