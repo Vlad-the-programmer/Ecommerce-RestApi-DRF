@@ -219,7 +219,6 @@ class User(AuthCommonModel, AbstractUser):
         if hasattr(self, 'role') and self.role and self.role.is_deleted:
             validation_errors.append("Assigned role is deleted")
 
-        # Log validation errors if any
         if validation_errors:
             logger.warning(
                 f"User validation failed - "
@@ -333,7 +332,6 @@ class Profile(CommonModel):
         verbose_name_plural = _('Profiles')
         ordering = ['user__email']
         indexes = CommonModel.Meta.indexes + [
-            # Core relationship indexes (aligned with select_related)
             models.Index(fields=['user', 'is_deleted']),  # ProfileManager + user lookup
             models.Index(fields=['is_deleted', 'user']),  # Alternative order
 
@@ -400,7 +398,6 @@ class Profile(CommonModel):
             if self.date_of_birth > timezone.now().date():
                 validation_errors.append("Date of birth cannot be in the future")
 
-        # Log validation errors if any
         if validation_errors:
             user_email = getattr(getattr(self, 'user', None), 'email', 'unknown')
             logger.warning(
@@ -428,7 +425,6 @@ class Profile(CommonModel):
             logger.debug(f"Profile {getattr(self, 'id', 'new')} base validation failed: {reason}")
             return False, reason
 
-        # Check if user has active orders
         if hasattr(self, 'user'):
             user_can_delete, reason = super().can_be_deleted()
             if not user_can_delete:

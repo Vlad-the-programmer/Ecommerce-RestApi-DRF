@@ -29,29 +29,23 @@ def send_email_change_confirmation(user, new_email: str, request) -> bool:
     """Send a confirmation email for email change request."""
 
     try:
-        # Generate token for email change confirmation
         token = default_token_generator.make_token(user)
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         email_b64 = urlsafe_base64_encode(force_bytes(new_email))
 
-        # Get site information
         domain, site_name = get_site_info(request)
 
-        # Prepare URL components
         protocol = 'https' if request.is_secure() else 'http'
         domain = domain.split('://')[-1].split('/')[0]
 
-        # Construct base URL with port if needed
         port = request.get_port()
         base_url = f'{protocol}://{domain}'
         if port and port not in ['80', '443'] and ':' not in domain:
             base_url = f'{base_url}:{port}'
 
-        # Construct the email change confirmation URL
         confirm_path = reverse('users:email_change_confirm', args=[uid, email_b64, token])
         confirm_url = f'{base_url}{confirm_path}'
 
-        # Prepare email context
         context = {
             'user': user,
             'new_email': new_email,
@@ -61,25 +55,21 @@ def send_email_change_confirmation(user, new_email: str, request) -> bool:
             'confirm_url': confirm_url,
         }
 
-        # Render email subject
         subject = render_to_string(
             'account/email/email_change_confirmation_subject.html',
             context
         ).strip()
 
-        # Render HTML email
         html_message = render_to_string(
             'account/email/email_change_confirmation_message.html',
             context
         )
 
-        # Render plain text fallback
         plain_message = render_to_string(
             'account/email/email_change_confirmation_message.txt',
             context
         )
 
-        # Send email to the NEW email address
         send_mail(
             subject=subject,
             message=plain_message,
@@ -101,10 +91,8 @@ def send_email_change_success_notification(user, old_email, new_email, request):
     """Send a success notification after email change."""
 
     try:
-        # Get site information
         domain, site_name = get_site_info(request)
 
-        # Prepare email context
         context = {
             'user': user,
             'old_email': old_email,
@@ -113,25 +101,21 @@ def send_email_change_success_notification(user, old_email, new_email, request):
             'site_name': site_name,
         }
 
-        # Render email subject
         subject = render_to_string(
             'account/email/email_change_success_notification_subject.txt',
             context
         ).strip()
 
-        # Render HTML email
         html_message = render_to_string(
             'account/email/email_change_success_notification.html',
             context
         )
 
-        # Render plain text fallback
         plain_message = render_to_string(
             'account/email/email_change_success_notification.txt',
             context
         )
 
-        # Send email to the NEW email address
         send_mail(
             subject=subject,
             message=plain_message,

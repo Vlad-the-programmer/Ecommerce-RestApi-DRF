@@ -177,9 +177,7 @@ class Wishlist(CommonModel):
 
     def get_available_items(self):
         """Get all available items in wishlist."""
-        return self.wishlist_items.filter(
-            is_deleted=False
-        )
+        return self.wishlist_items.all()
 
     def get_items_by_priority(self):
         """Get items ordered by priority."""
@@ -187,14 +185,8 @@ class Wishlist(CommonModel):
 
     def move_all_to_cart(self, cart):
         """Move all wishlist items to cart."""
-        items = self.wishlist_items.filter(is_deleted=False)
-        cart_items = []
 
-        for item in items:
-            cart_item = item.move_to_cart(cart)
-            cart_items.append(cart_item)
-
-        return cart_items
+        return self.objects.move_items_to_cart(self.wishlist_items.all(), cart)
 
 
 class WishListItem(ItemCommonModel):
@@ -373,27 +365,5 @@ class WishListItem(ItemCommonModel):
                 {"priority": _("Priority must be between 1 and 5.")}
             )
 
-    def move_to_cart(self, cart):
-        """Move this wishlist item to shopping cart."""
-        from cart.models import CartItem
-
-        cart_item, created = CartItem.objects.get_or_create(
-            cart=cart,
-            product=self.product,
-            variant=self.variant,
-            defaults={
-                'quantity': self.quantity,
-                'user': self.user
-            }
-        )
-
-        if not created:
-            cart_item.quantity += self.quantity
-            cart_item.save()
-
-        # Remove from wishlist after moving to cart
-        self.delete()
-
-        return cart_item
 
 

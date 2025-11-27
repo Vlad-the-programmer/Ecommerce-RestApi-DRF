@@ -195,14 +195,11 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
         variants_data = validated_data.pop('variants', [])
         images_data = validated_data.pop('product_images', [])
         
-        # Create the product
         product = Product.objects.create(**validated_data)
         
-        # Create variants
         for variant_data in variants_data:
             ProductVariant.objects.create(product=product, **variant_data)
         
-        # Create images
         for image_data in images_data:
             ProductImage.objects.create(product=product, **image_data)
         
@@ -212,7 +209,6 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
         variants_data = validated_data.pop('variants', None)
         images_data = validated_data.pop('product_images', None)
         
-        # Update product fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         
@@ -268,7 +264,6 @@ class ProductBulkUpdateSerializer(serializers.Serializer):
         help_text="List of product IDs to update"
     )
     
-    # Common fields that can be updated in bulk
     status = serializers.ChoiceField(choices=ProductStatus.choices, required=False)
     stock_status = serializers.ChoiceField(choices=StockStatus.choices, required=False)
     label = serializers.ChoiceField(choices=ProductLabel.choices, required=False)
@@ -286,7 +281,6 @@ class ProductBulkUpdateSerializer(serializers.Serializer):
         return value
     
     def update(self, instance, validated_data):
-        # This is a bulk update, so we don't use the instance parameter
         ids = validated_data.pop('ids')
         update_fields = {k: v for k, v in validated_data.items() if v is not None}
         

@@ -374,7 +374,7 @@ class ProfileDetailsUpdateSerializer(BaseUserProfileValidationSerializer, serial
     def validate_phone_number(self, value):
         """Validate phone number."""
         if value and Profile.objects.filter(phone_number=value).exists():
-            raise serializers.ValidationError("Phonenumber already exists.")
+            raise serializers.ValidationError("Phone number already exists.")
         return value
 
     def update(self, instance, validated_data):
@@ -383,20 +383,16 @@ class ProfileDetailsUpdateSerializer(BaseUserProfileValidationSerializer, serial
         """
         user_data = validated_data.pop('user', {}) if 'user' in validated_data else {}
 
-        # Update user data if provided
         if user_data:
             user = instance.user
             for attr, value in user_data.items():
                 setattr(user, attr, value)
             user.save()
 
-        # Handle avatar deletion
         if 'avatar' in validated_data and validated_data['avatar'] is None:
             if instance.avatar:
                 instance.avatar.delete(save=False)
 
-        # Update profile data
-        # Note: phone_number is automatically handled by PhoneNumberField
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
@@ -519,7 +515,6 @@ class EmailChangeConfirmSerializer(serializers.Serializer):
         new_email = self.validated_data['new_email']
         old_email = self.validated_data['old_email']
 
-        # Update user email
         user.email = new_email
         user.save()
 

@@ -100,24 +100,10 @@ class UserViewSet(viewsets.ModelViewSet):
         """
         Soft delete both profile and user.
         """
-        # Store user reference before deleting profile
         user = instance.user
 
-        # Soft delete the profile
-        instance.delete()  # This calls CommonModel.delete()
-
-        # Now soft delete the user
-        if hasattr(user, 'delete') and callable(user.delete):
-            # If User inherits from CommonModel, use its delete method
-            user.delete()
-        else:
-            # Otherwise, manually set the fields
-            user.is_active = False
-            if hasattr(user, 'is_deleted'):
-                user.is_deleted = True
-            if hasattr(user, 'date_deleted'):
-                user.date_deleted = timezone.now()
-            user.save()
+        instance.delete()
+        user.delete()
 
         logger.debug(f"Soft deleted profile {instance.uuid} and user {user.email}")
 
@@ -179,7 +165,6 @@ class EmailChangeConfirmView(CreateAPIView):
         }
     )
     def create(self, request, uidb64, email_b64, token, *args, **kwargs):
-        # Pass URL parameters to serializer
         data = {
             'uidb64': uidb64,
             'email_b64': email_b64,

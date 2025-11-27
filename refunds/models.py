@@ -8,7 +8,7 @@ from decimal import Decimal, DecimalException
 from rest_framework.exceptions import ValidationError
 
 from common.models import CommonModel
-from refunds.enums import RefundStatus, RefundReason, RefundMethod
+from refunds.enums import RefundStatus, RefundReason, RefundMethod, ACTIVE_REFUND_STATUSES
 from refunds.managers import RefundManager, RefundItemManager
 
 import logging
@@ -719,8 +719,7 @@ class RefundItem(CommonModel):
         # Check active refunds (excluding soft-deleted ones)
         active_refunds = RefundItem.objects.filter(
             order_item=self.order_item,
-            is_deleted=False,
-            refund__status__in=[RefundStatus.PENDING, RefundStatus.APPROVED, RefundStatus.COMPLETED]
+            refund__status__in=[*ACTIVE_REFUND_STATUSES, RefundStatus.COMPLETED]
         ).exclude(refund=self.refund)  # Exclude current refund if updating
 
         total_refunded = active_refunds.aggregate(
@@ -784,7 +783,6 @@ class RefundItem(CommonModel):
             elif self.refund.status == RefundStatus.COMPLETED:
                 validation_errors.append("Cannot modify items of a completed refund")
 
-        # Log validation errors if any
         if validation_errors:
             logger.warning(
                 f"RefundItem validation failed - "
@@ -827,13 +825,11 @@ class RefundItem(CommonModel):
                 return True, ""  # Allow deletion of items from rejected refunds
             
             # For pending/approved refunds, check if the refund is still in a modifiable state
-            if self.refund.status in [RefundStatus.PENDING, RefundStatus.APPROVED]:
+            if self.refund.status in ACTIVE_REFUND_STATUSES:
                 # Check if the refund item has already been processed
                 if hasattr(self, 'processed_at') and self.processed_at:
                     return False, "Cannot delete already processed refund item"
-                return True, ""
-        
-        # If we get here, the refund item can be deleted
+
         return True, ""
 
     def delete(self, *args, **kwargs):
@@ -843,11 +839,9 @@ class RefundItem(CommonModel):
         Raises:
             ValidationError: If the item cannot be deleted
         """
-        # Get refund reference before deletion
         refund = getattr(self, 'refund', None)
         
         try:
-            # First soft delete the item
             super().delete(*args, **kwargs)
             
             # Update parent refund amounts if needed
@@ -859,4 +853,5 @@ class RefundItem(CommonModel):
             logger.error(f"Error deleting refund item {getattr(self, 'id', 'unknown')}: {str(e)}")
             raise
         else:
-            logger.info(f"Soft deleted refund item {getattr(self, 'id', 'unknown')} from refund {getattr(refund, 'refund_number', 'unknown')}")
+            logger.info(f"Soft deleted refund item {getattr(self, 'id', 'unknown')} "
+                        f"from refund {getattr(refund, 'refund_number', 'unknown')}")

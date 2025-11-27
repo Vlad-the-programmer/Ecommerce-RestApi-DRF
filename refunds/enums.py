@@ -27,3 +27,7 @@ class RefundMethod(TextChoices):
     STORE_CREDIT = 'store_credit', _('Store Credit')
     BANK_TRANSFER = 'bank_transfer', _('Bank Transfer')
     GIFT_CARD = 'gift_card', _('Gift Card')
+
+
+# List of active rufund statatuses
+ACTIVE_REFUND_STATUSES = [RefundStatus.PENDING, RefundStatus.PROCESSING, RefundStatus.APPROVED]

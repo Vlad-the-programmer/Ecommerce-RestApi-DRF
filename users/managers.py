@@ -19,7 +19,7 @@ class CustomUserManager(BaseUserManager):
 
     def get_queryset(self):
         """Default queryset excludes soft deleted users."""
-        return super().get_queryset().select_related('profile').filter(is_deleted=False)
+        return super().get_queryset().select_related('profile')
 
     def normalize_email(self, email):
         """
@@ -127,18 +127,9 @@ class CustomUserManager(BaseUserManager):
 
         return self._create_user(email, password, **extra_fields)
 
-    # Soft delete related methods
-    def with_deleted(self):
-        """Return a queryset that includes soft-deleted users."""
-        return super().get_queryset()
-
-    def deleted(self):
-        """Return only soft-deleted users."""
-        return super().get_queryset().filter(is_deleted=True)
-
     def active(self):
         """Return only active, non-deleted users."""
-        return self.get_queryset().filter(is_active=True)
+        return self.get_queryset().filter(is_active=True, is_deleted=False)
 
     def inactive(self):
         """Return only inactive, non-deleted users."""
@@ -153,7 +144,6 @@ class CustomUserManager(BaseUserManager):
         """Filter users by email domain."""
         return self.get_queryset().filter(email__iendswith=f'@{domain}')
 
-    # Bulk operations
     def bulk_soft_delete(self, queryset=None):
         """Soft delete multiple users."""
         from django.utils import timezone

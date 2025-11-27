@@ -62,13 +62,12 @@ class Location(AddressBaseModel):
 
         order_items = OrderItem.objects.filter(product__location=self)
 
-        can_be_deleted_list = [] # List of cam_be_deleted() booleans for each order item
+        can_be_deleted_list = []
         for order_item in order_items:
             can_be_deleted, reason = order_item.can_be_deleted()
             can_be_deleted_list.append(can_be_deleted)
 
         # If there are product and order_items associated with the location any order
-        # item cannot be deleted, return False
         if Product.objects.filter(location=self).exists() and order_items.exists() and not all(can_be_deleted_list):
             return False, "Cannot delete location that has active order items associated with it"
         return super().can_be_deleted()
@@ -91,7 +90,6 @@ class ProductVariant(CommonModel):
         verbose_name=_("Variant SKU")
     )
 
-    # Cost and pricing
     cost_price = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -107,7 +105,6 @@ class ProductVariant(CommonModel):
         verbose_name=_("Price Adjustment")
     )
 
-    # Stock management
     stock_quantity = models.PositiveIntegerField(
         default=0,
         verbose_name=_("Stock Quantity")
@@ -117,14 +114,12 @@ class ProductVariant(CommonModel):
         verbose_name=_("Low Stock Threshold")
     )
 
-    # Warehouse inventory relationship
     warehouse_inventory = models.ManyToManyField(
         'inventory.WarehouseProfile',
         through='inventory.Inventory',
         related_name='product_variants'
     )
 
-    # Variant attributes
     color = models.CharField(max_length=50, blank=True, null=True)
     size = models.CharField(max_length=50, blank=True, null=True)
     material = models.CharField(max_length=50, blank=True, null=True)
@@ -149,11 +144,9 @@ class ProductVariant(CommonModel):
         ordering = ["product", "color", "size"]
         unique_together = ['product', 'color', 'size', 'material', 'style']
         indexes = CommonModel.Meta.indexes + [
-            # Core variant indexes
             models.Index(fields=['product', 'is_deleted', 'is_active']),
             models.Index(fields=['sku', 'is_deleted']),
 
-            # Attribute-based filtering
             models.Index(fields=['color', 'is_deleted']),
             models.Index(fields=['size', 'is_deleted']),
             models.Index(fields=['material', 'is_deleted']),
@@ -223,7 +216,6 @@ class ProductVariant(CommonModel):
         # Check for duplicate SKU (case-insensitive)
         duplicate_sku = ProductVariant.objects.filter(
             sku__iexact=self.sku,
-            is_deleted=False,
             product_id=self.product_id
         ).exclude(pk=self.pk).exists()
 
@@ -279,7 +271,7 @@ class ProductVariant(CommonModel):
         active_order_items = OrderItem.objects.filter(
             variant=self,
             order__status__in=active_order_statuses
-        ).select_related('order').order_by('-order__date_created')[:5]  # Get most recent 5 for logging
+        ).select_related('order').order_by('-order__date_created')[:5]
 
         if active_order_items.exists():
             order_ids = [str(item.order.id) for item in active_order_items]
@@ -297,9 +289,7 @@ class ProductVariant(CommonModel):
         # Check if this is the last variant of the product
         if not self.product.has_variants:
             other_variants = ProductVariant.objects.filter(
-                product=self.product,
-                is_deleted=False,
-                is_active=True
+                product=self.product
             ).exclude(pk=self.pk).exists()
 
             if not other_variants and self.product.status == ProductStatus.PUBLISHED:
@@ -423,7 +413,7 @@ class ProductVariant(CommonModel):
 
         # Validate SKU uniqueness
         if ProductVariant.objects.filter(
-                sku__iexact=self.sku, is_deleted=False
+                sku__iexact=self.sku
         ).exclude(pk=self.pk).exists():
             raise ValidationError({'sku': _("Variant SKU must be unique")})
 
@@ -862,7 +852,6 @@ class Product(SlugFieldCommonModel):
         verbose_name = 'Product'
         verbose_name_plural = 'Products'
         indexes = SlugFieldCommonModel.Meta.indexes + [
-            # Core indexes
             models.Index(fields=['product_name']),
             models.Index(fields=['category', 'status']),
             models.Index(fields=['product_type', 'status']),
@@ -984,12 +973,10 @@ class Product(SlugFieldCommonModel):
 
             logger.debug(f"Product {self.id} has {len(valid_variants)} valid variants")
 
-            # Simple product stock validation
             if self.track_inventory and not self.total_stock_quantity > 0:
                 logger.warning(f"Product {self.id} is out of stock and track_inventory is enabled")
                 return False
 
-        # Expiration check
         if self.is_expired:
             logger.info(f"Product {self.id} has expired")
             return False
@@ -1013,8 +1000,7 @@ class Product(SlugFieldCommonModel):
             return can_delete, reason
 
         if self.has_variants:
-            # Check for active variants
-            active_variants = self.product_variants.filter(is_deleted=False, is_active=True)
+            active_variants = self.product_variants.all()
             if active_variants.exists():
                 variant_info = ", ".join(str(v.id) for v in active_variants[:3])
                 if active_variants.count() > 3:

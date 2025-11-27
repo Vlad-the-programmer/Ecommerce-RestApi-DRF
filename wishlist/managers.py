@@ -9,7 +9,6 @@ class WishListManager(SoftDeleteManager):
     """
     Custom manager for Wishlist model with wishlist-specific methods.
     """
-
     def for_user(self, user):
         """Get wishlist for specific user"""
         return self.get_queryset().filter(user=user).first()
@@ -57,6 +56,57 @@ class WishListManager(SoftDeleteManager):
     def user_has_wishlist(self, user):
         """Check if user has an active wishlist"""
         return self.get_queryset().filter(user=user).exists()
+
+    def move_items_to_cart(self, wishlist_items, cart):
+        """
+        Move multiple wishlist items to cart and delete them from wishlist.
+        Returns list of created/updated cart items.
+        
+        Args:
+            wishlist_items: List of WishListItem instances to move to cart
+            cart: Cart instance to move items to
+            
+        Returns:
+            list: List of tuples containing (cart_item, created) for each processed item
+        """
+        from cart.models import CartItem
+        from django.db import transaction
+
+        if not wishlist_items.exists():
+            return []
+
+        cart_items = []
+        wishlist_items_to_delete = []
+        
+        with transaction.atomic():
+            for wishlist_item in wishlist_items:
+                # Get or create cart item
+                cart_item, created = CartItem.objects.get_or_create(
+                    cart=cart,
+                    product=wishlist_item.product,
+                    variant=wishlist_item.variant,
+                    defaults={
+                        'quantity': wishlist_item.quantity,
+                        'user': wishlist_item.user
+                    }
+                )
+                
+                # If cart item already exists, update quantity
+                if not created:
+                    cart_item.quantity += wishlist_item.quantity
+                    cart_item.save(update_fields=['quantity'])
+                
+                cart_items.append((cart_item, created))
+                wishlist_items_to_delete.append(wishlist_item)
+            
+            # Delete wishlist items in bulk
+            if wishlist_items_to_delete:
+                from .models import WishListItem
+                WishListItem.objects.filter(
+                    id__in=[item.id for item in wishlist_items_to_delete]
+                ).delete()
+        
+        return cart_items
 
 
 class WishListItemManager(SoftDeleteManager):
@@ -125,20 +175,6 @@ class WishListItemManager(SoftDeleteManager):
         if wishlist_id:
             queryset = queryset.filter(wishlist_id=wishlist_id)
         return queryset
-
-    def move_items_to_cart(self, wishlist_item_ids, cart):
-        """
-        Move multiple wishlist items to cart and delete them from wishlist.
-        Returns list of created/updated cart items.
-        """
-        items = self.get_queryset().filter(id__in=wishlist_item_ids)
-        cart_items = []
-
-        for wishlist_item in items:
-            cart_item = wishlist_item.move_to_cart(cart)
-            cart_items.append(cart_item)
-
-        return cart_items
 
     def bulk_update_priority(self, wishlist_item_ids, new_priority):
         """Bulk update priority for multiple wishlist items"""
