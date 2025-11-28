@@ -156,6 +156,8 @@ class OrderItem(ItemCommonModel):
     objects = OrderItemManager()
 
     order = models.ForeignKey("orders.Order", on_delete=models.PROTECT, related_name="order_items")
+    product = models.ForeignKey("products.Product", on_delete=models.PROTECT, related_name="order_items")
+    variant = models.ForeignKey("products.ProductVariant", on_delete=models.PROTECT, related_name="order_items")
 
     def __str__(self):
         return f"Order {self.order.id} - Order Item {self.id}"

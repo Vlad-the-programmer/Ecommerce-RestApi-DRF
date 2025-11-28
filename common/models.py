@@ -67,7 +67,11 @@ class CommonModel(models.Model):
         Returns:
             bool: True if the item is active and not deleted, False otherwise
         """
-        return self.is_active and not self.is_deleted
+        is_active = self.is_active and not self.is_deleted
+        if is_active:
+            logger.warning(f"{self._meta.verbose_name} {self.id} is not active or has been deleted")
+            return False
+        return True
 
     def save(self, *args, **kwargs):
         """
@@ -86,11 +90,9 @@ class CommonModel(models.Model):
             self.full_clean()
 
 
-            # Use a transaction to ensure atomicity
             with transaction.atomic():
                 update_fields = kwargs.get("update_fields", [])
                 if self.pk:
-                    # Handle update_fields and force_insert/force_update
                     if update_fields:
                         # If we're forcing insert but have update_fields, convert to force_update
                         if 'force_insert' in kwargs and kwargs['force_insert']:
@@ -98,7 +100,7 @@ class CommonModel(models.Model):
                             kwargs['force_update'] = True
 
                         # Only pass update_fields if it's not empty
-                        kwargs['update_fields'] = list(set(update_fields))  # Remove duplicates
+                        kwargs['update_fields'] = list(set(update_fields))
                     elif 'update_fields' in kwargs:
                         del kwargs['update_fields']
 
@@ -137,8 +139,11 @@ class CommonModel(models.Model):
         Returns:
             tuple: (can_delete: bool, reason: str)
         """
+        if not self.pk:
+            return False, f"Cannot delete non-existent {self._meta.verbose_name} with no pk"
+
         if self.is_deleted:
-            return False, f"{self.__class__.__name__.title()} is already deleted"
+            return False, f"{self._meta.verbose_name} {self.id} is already deleted"
 
         return True, ""
 
@@ -171,15 +176,12 @@ class CommonModel(models.Model):
         """
         try:
             with transaction.atomic():
-                # Check if the instance can be deleted
                 self._check_can_be_deleted_or_raise_error()
 
-                # Update instance fields
                 self.is_deleted = True
                 self.is_active = False
                 self.date_deleted = timezone.now()
 
-                # Handle update_fields
                 update_fields = kwargs.pop('update_fields', None)
                 update_fields_mode = kwargs.pop('update_fields_mode', 'extend')
 
@@ -187,29 +189,11 @@ class CommonModel(models.Model):
 
                 if update_fields is not None:
                     if update_fields_mode == 'extend':
-                        # Merge with default fields, removing duplicates
                         update_fields = list(dict.fromkeys([*update_fields, *default_update_fields]))
-                    # else: use the provided update_fields as-is
 
-                # Save with or without signals based on kwargs
-                if kwargs.pop('update_fields', True):
-                    self.save(update_fields=update_fields or default_update_fields)
-                else:
-                    # Direct SQL update to avoid signal recursion
-                    update_data = {
-                        'is_deleted': True,
-                        'is_active': False,
-                        'date_deleted': timezone.now(),
-                        'date_updated': timezone.now()
-                    }
-                    if update_fields:
-                        update_data = {k: v for k, v in update_data.items() if k in update_fields}
+                self.save(update_fields=update_fields or default_update_fields)
+                self.refresh_from_db(fields=update_fields or default_update_fields)
 
-                    self.__class__._default_manager.filter(pk=self.pk).update(**update_data)
-                    # Refresh instance to reflect changes
-                    self.refresh_from_db(fields=update_fields or default_update_fields)
-
-                # Handle related objects
                 self._handle_related_objects_on_delete()
 
                 logger.info(
@@ -404,12 +388,9 @@ class AddressBaseModel(CommonModel):
         Returns:
             bool: True if the address is valid, False otherwise
         """
-        # Check parent class validation
         if not super().is_valid():
-            logger.warning(f"{self.__class__.__name__} validation failed: Parent class validation failed")
             return False
 
-        # Check required fields
         required_fields = {
             'city': self.city,
             'country': self.country
@@ -417,22 +398,19 @@ class AddressBaseModel(CommonModel):
 
         for field, value in required_fields.items():
             if not value:
-                logger.warning(f"{self.__class__.__name__} validation failed: Missing required field {field}")
+                logger.warning(f"{self._meta.verbose_name} validation failed: Missing required field {field}")
                 return False
 
-        # Check at least one of street or address_line_1 is provided
         if not (self.street or self.address_line_1):
-            logger.warning(f"{self.__class__.__name__} validation failed: Either street or address_line_1 is required")
+            logger.warning(f"{self._meta.verbose_name} validation failed: Either street or address_line_1 is required")
             return False
 
-        # Check zip_code is not empty if provided
         if self.zip_code is not None and not self.zip_code.strip():
-            logger.warning(f"{self.__class__.__name__} validation failed: ZIP code cannot be empty if provided")
+            logger.warning(f"{self._meta.verbose_name} validation failed: ZIP code cannot be empty if provided")
             return False
 
-        # Check state is valid if country requires it
         if hasattr(self, 'country') and self.country and not self._is_valid_state():
-            logger.warning(f"{self.__class__.__name__} validation failed: Invalid state for country {self.country}")
+            logger.warning(f"{self._meta.verbose_name} validation failed: Invalid state for country {self.country}")
             return False
 
         return True
@@ -464,16 +442,13 @@ class AddressBaseModel(CommonModel):
                 - can_delete: True if the address can be deleted, False otherwise
                 - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
         """
-        # Check parent class constraints
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
             return False, reason
 
-        # Check if address is used in any orders
         if hasattr(self, 'orders') and self.orders.exists():
             return False, "Cannot delete address that is used in orders"
 
-        # Check if address is a default shipping/billing address
         if hasattr(self, 'is_default') and self.is_default:
             return False, "Cannot delete default address. Set another address as default first."
 
@@ -483,7 +458,6 @@ class AddressBaseModel(CommonModel):
         """Run model validation before saving."""
         super().clean()
 
-        # Normalize fields
         if self.city:
             self.city = self.city.strip()
         if self.state:
@@ -497,12 +471,21 @@ class ItemCommonModel(CommonModel):
 
     objects = CartItemManager()
 
+    # abstract field SHOULD BE OVERRIDEN in a child class
     product = models.ForeignKey(
         'products.Product',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         help_text=_("Product for this item")
+    )
+    # abstract field SHOULD BE OVERRIDEN in a child class
+    variant = models.ForeignKey(
+        'products.ProductVariant',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text=_("Selected variant for this item")
     )
     quantity = models.PositiveIntegerField(
         help_text=_("Quantity of the product"),
@@ -514,15 +497,6 @@ class ItemCommonModel(CommonModel):
         decimal_places=2,
         default=0.00,
         help_text=_("Total price of the product")
-    )
-
-    variant = models.ForeignKey(
-        'products.ProductVariant',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='+',
-        help_text=_("Selected variant for this cart item")
     )
 
     class Meta:
@@ -547,19 +521,47 @@ class ItemCommonModel(CommonModel):
             )
         ]
 
+    def is_valid(self, *args, **kwargs) -> bool:
+        """Check if item is valid."""
+        if not super().is_valid():
+            return False
+
+        if not self.product or not self.product.is_valid():
+            logger.debug(f"{self._meta.verbose_name} validation failed. Product is valid: {self.product.is_valid()}")
+            return False
+
+        if hasattr(self.product, 'is_in_stock') and not self.product.is_in_stock():
+            logger.debug(f"{self._meta.verbose_name} validation failed. Product is in stock: {self.product.is_in_stock()}")
+            return False
+
+        if self.quantity < 1:
+            logger.debug(f"{self._meta.verbose_name} validation failed. Quantity is valid: {self.quantity < 1}")
+            return False
+
+        if hasattr(self, 'variant') and self.variant and \
+                hasattr(self.variant, 'is_in_stock') and not self.variant.is_in_stock():
+            logger.debug(f"{self._meta.verbose_name} validation failed. Variant is in stock: {self.variant.is_in_stock()}")
+            return False
+
+        if hasattr(self, 'variant') and self.variant and not self.variant.is_valid():
+            logger.debug(f"{self._meta.verbose_name} validation failed. Variant is valid: {self.variant.is_valid()}")
+            return False
+
+
+        return True
+
     def can_be_deleted(self):
         """Check if item can be safely soft-deleted."""
         if not super().can_be_deleted()[0]:
             return False, super().can_be_deleted()[1]
 
-        # Check for active orders with this variant
         from orders.models import OrderItem
         from orders.enums import active_order_statuses
         if OrderItem.objects.filter(
                 variant=self,
                 order__status__in=active_order_statuses
         ).exists():
-            return False, "Cannot delete variant with active or pending orders"
+            return False, f"Cannot delete {self._meta.verbose_name.lower()} with active or pending orders"
 
         product_can_be_deleted, reason = self.product.can_be_deleted()
         if not product_can_be_deleted:
@@ -775,11 +777,9 @@ class ItemCommonModel(CommonModel):
         if not self.product_id and not self.variant_id:
             raise ValidationError(_("Either product or variant must be set."))
 
-        # Validate quantity is positive
         if self.quantity < 1:
             raise ValidationError(_("Quantity must be at least 1."))
 
-        # Check availability if item is active
         if self.is_active and not self.is_deleted:
             if not self.is_available:
                 raise ValidationError(
@@ -789,17 +789,14 @@ class ItemCommonModel(CommonModel):
 
     def save(self, *args, **kwargs):
         """Automatically calculate total price before saving with validation"""
-        # Calculate price
         price = self.item_final_price
         quantity = Decimal(str(self.quantity))
         self.total_price = price * quantity
 
         update_fields = kwargs.get("update_fields", [])
 
-        # Only modify update_fields if we're not forcing insert
-        if 'force_insert' not in kwargs or not kwargs['force_insert']:
-            if "total_price" not in update_fields:
-                update_fields.append("total_price")
+        if "total_price" not in update_fields:
+            update_fields.append("total_price")
 
         super().save(*args, **kwargs)
 
@@ -932,17 +929,12 @@ class ShippingAddress(AddressBaseModel):
         db_table = "shipping_addresses"
         verbose_name = "Shipping Address"
         verbose_name_plural = "Shipping Addresses"
-        ordering = ["-is_default", "-date_created"]  # Default addresses first, then newest
+        ordering = ["-is_default", "-date_created"]
         indexes = AddressBaseModel.Meta.indexes + [
-            # Core relationship indexes
-            models.Index(fields=["user", "is_deleted"]),  # User's addresses + manager
-            models.Index(fields=["user", "is_default", "is_deleted"]),  # User's default address
-
-
-            models.Index(fields=["user", "country", "is_deleted"]),  # User's addresses by country
-
-            # Default address quick lookup
-            models.Index(fields=["is_default", "is_deleted"]),  # All default addresses
+            models.Index(fields=["user", "is_deleted"]),
+            models.Index(fields=["user", "is_default", "is_deleted"]),
+            models.Index(fields=["user", "country", "is_deleted"]),
+            models.Index(fields=["is_default", "is_deleted"]),
         ]
         constraints = AddressBaseModel.Meta.constraints + [
             # Prevent duplicate default addresses per user
@@ -963,16 +955,13 @@ class ShippingAddress(AddressBaseModel):
                 - can_delete: True if the address can be deleted, False otherwise
                 - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
         """
-        # Check parent class constraints
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
             return False, reason
 
-        # Check if this is the only shipping address
         if hasattr(self, 'user') and self.user.shipping_addresses.count() <= 1:
             return False, "Cannot delete the only shipping address"
 
-        # Check if this is the default address and there are other addresses
         if self.is_default and hasattr(self, 'user'):
             other_addresses = self.user.shipping_addresses.exclude(pk=self.pk).exists()
             if not other_addresses:
@@ -980,11 +969,9 @@ class ShippingAddress(AddressBaseModel):
             if not self.user.shipping_addresses.filter(is_default=True).exclude(pk=self.pk).exists():
                 return False, "Set another address as default before deleting this one"
 
-        # Check if this address is used in any orders
         if hasattr(self, 'orders') and self.orders.exists():
             return False, "Cannot delete shipping address used in orders"
 
-        # Check if this address is used in any shipments
         if hasattr(self, 'shipments') and self.shipments.exists():
             return False, "Cannot delete shipping address used in shipments"
 
@@ -993,7 +980,6 @@ class ShippingAddress(AddressBaseModel):
     def save(self, *args, **kwargs):
         """Override save to handle default address logic."""
         update_fields = kwargs.get("update_fields", [])
-        is_new = self.pk is None
 
         # If this is being set as default, unset other defaults
         if self.is_default and hasattr(self, 'user'):
@@ -1007,17 +993,8 @@ class ShippingAddress(AddressBaseModel):
             if "is_default" not in update_fields:
                 update_fields.append("is_default")
 
-        # Handle update_fields and force_insert/force_update
         if update_fields:
-            # If we're forcing insert but have update_fields, convert to force_update
-            if 'force_insert' in kwargs and kwargs['force_insert']:
-                del kwargs['force_insert']
-                kwargs['force_update'] = True
-
-            # Only pass update_fields if it's not empty
-            kwargs['update_fields'] = list(set(update_fields))  # Remove duplicates
-        elif 'update_fields' in kwargs:
-            del kwargs['update_fields']
+            kwargs['update_fields'] = list(set(update_fields))
 
         try:
             super().save(*args, **kwargs)
@@ -1043,23 +1020,14 @@ class ShippingAddress(AddressBaseModel):
 class BillingAddress(AddressBaseModel):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
                              related_name="billing_addresses")
-
-    # Company information (for business purchases)
     company_name = models.CharField(max_length=100, blank=True, null=True,
                                     help_text=_("Company name (if applicable)"))
     tax_id = models.CharField(max_length=50, blank=True, null=True, help_text=_("VAT ID, GST number, etc."))
 
-    # Contact person
     contact_name = models.CharField(max_length=100, help_text=_("Full name for billing contact"),
                                     null=True, blank=True)
-
-
-
-    # Contact information
     email = models.EmailField(help_text=_("Email for billing receipts"), null=True, blank=True)
     phone = PhoneNumberField(blank=True, null=True)
-
-    # Billing specific
     is_default = models.BooleanField(default=False, help_text=_("Set as default billing address"))
     is_business = models.BooleanField(default=False, help_text=_("Business address"))
 
@@ -1081,12 +1049,9 @@ class BillingAddress(AddressBaseModel):
         verbose_name_plural = "Billing Addresses"
         ordering = ["-is_default", "-date_created"]
         indexes = AddressBaseModel.Meta.indexes + [
-            # Core relationship indexes
             models.Index(fields=["user", "is_deleted"]),
             models.Index(fields=["user", "is_default", "is_deleted"]),
             models.Index(fields=["user", "is_business", "is_deleted"]),
-
-            # Business-specific indexes
             models.Index(fields=["is_business", "is_deleted"]),
             models.Index(fields=["company_name", "is_deleted"]),
 
@@ -1102,7 +1067,6 @@ class BillingAddress(AddressBaseModel):
                 name='%(app_label)s_%(class)s_require_contact_name',
                 violation_error_message=_('Contact name is required for non-business addresses.')
             ),
-            # Ensure email is provided and valid
             models.CheckConstraint(
                 check=(
                         models.Q(email__isnull=False) &
@@ -1121,7 +1085,6 @@ class BillingAddress(AddressBaseModel):
                 name='%(app_label)s_%(class)s_require_tax_id_for_business',
                 violation_error_message=_('Tax ID is required for business addresses.')
             ),
-            # Ensure phone number is valid if provided
             models.CheckConstraint(
                 check=(
                         models.Q(phone__isnull=True) |
@@ -1155,12 +1118,9 @@ class BillingAddress(AddressBaseModel):
         Returns:
             bool: True if the billing address is valid, False otherwise
         """
-        # Check parent class validation
         if not super().is_valid():
-            logger.warning(f"BillingAddress validation failed: Parent class validation failed")
             return False
 
-        # Check required fields
         required_fields = {
             'email': self.email,
             'contact_name': None if self.is_business else self.contact_name,
@@ -1172,16 +1132,14 @@ class BillingAddress(AddressBaseModel):
                 logger.warning(f"BillingAddress validation failed: Missing required field {field}")
                 return False
 
-        # Validate email format
         if self.email and '@' not in self.email:
             logger.warning("BillingAddress validation failed: Invalid email format")
             return False
 
-        # Validate phone number if provided
         if self.phone:
             try:
                 parsed_phone = str(self.phone)
-                if len(parsed_phone) < 5:  # Basic validation
+                if len(parsed_phone) < 5:
                     logger.warning("BillingAddress validation failed: Invalid phone number")
                     return False
             except Exception as e:
@@ -1199,22 +1157,18 @@ class BillingAddress(AddressBaseModel):
                 - can_delete: True if the address can be deleted, False otherwise
                 - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
         """
-        # Check parent class constraints
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
             return False, reason
 
-        # Check if this is the only billing address
         if hasattr(self, 'user') and self.user.billing_addresses.count() <= 1:
             return False, "Cannot delete the only billing address"
 
-        # Check if this is the default address and there are other addresses
         if self.is_default and hasattr(self, 'user'):
             other_addresses = self.user.billing_addresses.exclude(pk=self.pk).exists()
             if other_addresses:
                 return False, "Set another address as default before deleting this one"
 
-        # Check if this address is used in any orders
         if hasattr(self, 'orders') and self.orders.exists():
             return False, "Cannot delete billing address used in orders"
 
@@ -1224,28 +1178,24 @@ class BillingAddress(AddressBaseModel):
         """Run model validation before saving."""
         super().clean()
 
-        # Normalize fields
         if self.company_name:
             self.company_name = self.company_name.strip()
         if self.contact_name:
             self.contact_name = self.contact_name.strip()
         if self.tax_id:
-            self.tax_id = self.tax_id.strip().upper()  # Normalize tax ID to uppercase
+            self.tax_id = self.tax_id.strip().upper()
         if self.email:
             self.email = self.email.lower().strip()
 
-        # If this is a business address, ensure company name is set
         if self.is_business and not self.company_name:
             self.company_name = self.contact_name or ""
 
-        # If this is the only address, make it default
         if hasattr(self, 'user') and not self.user.billing_addresses.exists():
             self.is_default = True
 
     def save(self, *args, **kwargs):
         """Override save to handle default address logic."""
         update_fields = kwargs.get("update_fields", [])
-        is_new = self.pk is None
 
         # If this is being set as default, unset other defaults
         if self.is_default and hasattr(self, 'user'):
@@ -1258,6 +1208,9 @@ class BillingAddress(AddressBaseModel):
             self.is_default = True
             if "is_default" not in update_fields:
                 update_fields.append("is_default")
+
+        if update_fields:
+            kwargs['update_fields'] = list(set(update_fields))
 
         try:
             super().save(*args, **kwargs)

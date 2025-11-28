@@ -9,8 +9,6 @@ from products.models import Product, Location
 from category.models import Category
 
 
-# URL Fixtures
-
 @pytest.fixture
 def cart_list_url():
     """URL for cart list endpoint."""
@@ -83,8 +81,6 @@ def saved_cart_restore_url():
     return _saved_cart_restore_url
 
 
-# Model Factories
-
 @pytest.fixture
 def category_factory(db):
     """Create a category factory fixture."""
@@ -126,11 +122,9 @@ def product_factory(db, category_factory, location_factory):
     def _create_product(**kwargs):
         from products.enums import ProductType, ProductCondition, ProductStatus, StockStatus, ProductLabel
         
-        # Get or create required related objects if not provided
         if 'category' not in kwargs:
             kwargs['category'] = category_factory()
             
-        # Handle product type specific fields
         product_type = kwargs.get('product_type', ProductType.PHYSICAL)
         
         defaults = {
@@ -153,7 +147,6 @@ def product_factory(db, category_factory, location_factory):
             'shipping_to_warehouse_cost': Decimal('0.50'),
         }
         
-        # Add product type specific defaults
         if product_type == ProductType.DIGITAL:
             defaults.update({
                 'download_limit': 5,
@@ -172,10 +165,8 @@ def product_factory(db, category_factory, location_factory):
             if 'location' not in kwargs:
                 defaults['location'] = location_factory()
         
-        # Update with any provided kwargs, allowing overrides of defaults
         defaults.update(kwargs)
         
-        # Create the product instance without saving
         product = Product.objects.create(**defaults)
 
         product.refresh_from_db()
@@ -184,19 +175,14 @@ def product_factory(db, category_factory, location_factory):
 
 
 @pytest.fixture
-def cart_factory(db, user_factory):
+def cart_factory(db, verified_user):
     """Create a cart factory fixture."""
     def _create_cart(**kwargs):
         if 'user' not in kwargs:
-            kwargs['user'] = user_factory()
+            kwargs['user'], _, _, _ = verified_user
             
         defaults = {
-            'status': 'active',
-            'shipping_address': None,
-            'billing_address': None,
-            'shipping_method': 'standard',
-            'shipping_cost': Decimal('0.00'),
-            'notes': '',
+            'status': 'active'
         }
         defaults.update(kwargs)
         return Cart.objects.create(**defaults)
@@ -215,7 +201,6 @@ def cart_item_factory(db, cart_factory, product_factory):
         defaults = {
             'quantity': 1,
             'price': kwargs['product'].price,
-            'notes': '',
         }
         defaults.update(kwargs)
         return CartItem.objects.create(**defaults)
@@ -254,17 +239,23 @@ def coupon_factory(db, product_factory):
 
 
 @pytest.fixture
-def saved_cart_factory(db, user_factory):
+def saved_cart_factory(db, verified_user, cart_factory):
     """Create a saved cart factory fixture."""
     def _create_saved_cart(**kwargs):
         if 'user' not in kwargs:
-            kwargs['user'] = user_factory()
+            kwargs['user'], _, _, _ = verified_user
             
         defaults = {
             'name': 'Saved Cart',
             'is_default': False,
-            'notes': 'Test saved cart',
         }
+
+        if 'original_cart' not in kwargs:
+            kwargs['original_cart'] = cart_factory()
+
+        if 'expires_at' not in kwargs:
+            kwargs['expires_at'] = timezone.now() + timedelta(days=30)
+
         defaults.update(kwargs)
         return SavedCart.objects.create(**defaults)
     return _create_saved_cart

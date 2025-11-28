@@ -185,7 +185,7 @@ class TestCouponViewSet:
 class TestSavedCartViewSet:
     """Test cases for the SavedCartViewSet."""
     
-    def test_save_cart(self, authenticated_client, cart_item_factory, saved_cart_list_url):
+    def test_save_cart(self, authenticated_client, verified_user, cart_item_factory, saved_cart_list_url):
         """Test saving the current cart."""
         user, _, _, _ = verified_user
 
@@ -209,7 +209,7 @@ class TestSavedCartViewSet:
         saved_cart = SavedCart.objects.first()
         assert saved_cart.items.count() == 1
     
-    def test_restore_saved_cart(self, authenticated_client, saved_cart_item_factory, saved_cart_restore_url):
+    def test_restore_saved_cart(self, authenticated_client, verified_user, saved_cart_item_factory, saved_cart_restore_url):
         """Test restoring a saved cart."""
         user, _, _, _ = verified_user
 
@@ -227,9 +227,9 @@ class TestSavedCartViewSet:
         assert restored_cart.items.count() == 1
         assert restored_cart.items.first().product == saved_cart_item.product
     
-    def test_cannot_restore_other_users_cart(self, authenticated_client, user_factory, saved_cart_factory, saved_cart_restore_url):
+    def test_cannot_restore_other_users_cart(self, authenticated_client, verified_user, saved_cart_factory, saved_cart_restore_url):
         """Test that users can only restore their own saved carts."""
-        other_user = user_factory()
+        other_user =verified_user
         saved_cart = saved_cart_factory(user=other_user)
         
         response = authenticated_client.post(saved_cart_restore_url(saved_cart.id))

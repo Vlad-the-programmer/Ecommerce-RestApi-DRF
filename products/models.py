@@ -67,7 +67,6 @@ class Location(AddressBaseModel):
             can_be_deleted, reason = order_item.can_be_deleted()
             can_be_deleted_list.append(can_be_deleted)
 
-        # If there are product and order_items associated with the location any order
         if Product.objects.filter(location=self).exists() and order_items.exists() and not all(can_be_deleted_list):
             return False, "Cannot delete location that has active order items associated with it"
         return super().can_be_deleted()
@@ -82,6 +81,8 @@ class ProductVariant(CommonModel):
     product = models.ForeignKey(
         "Product",
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="product_variants"
     )
     sku = models.CharField(
@@ -117,7 +118,9 @@ class ProductVariant(CommonModel):
     warehouse_inventory = models.ManyToManyField(
         'inventory.WarehouseProfile',
         through='inventory.Inventory',
-        related_name='product_variants'
+        related_name='product_variants',
+        null=True,
+        blank=True
     )
 
     color = models.CharField(max_length=50, blank=True, null=True)
@@ -152,16 +155,13 @@ class ProductVariant(CommonModel):
             models.Index(fields=['material', 'is_deleted']),
             models.Index(fields=['style', 'is_deleted']),
 
-            # Inventory management
             models.Index(fields=['stock_quantity', 'is_deleted']),
             models.Index(fields=['product', 'stock_quantity', 'is_deleted']),
             models.Index(fields=['is_deleted', 'stock_quantity', 'is_active']),
 
-            # Price and cost queries
             models.Index(fields=['price_adjustment', 'is_deleted']),
             models.Index(fields=['cost_price', 'is_deleted']),
 
-            # Composite indexes for common queries
             models.Index(fields=['product', 'color', 'size', 'is_deleted']),
             models.Index(fields=['is_deleted', 'is_active', 'stock_quantity']),
         ]
@@ -185,22 +185,17 @@ class ProductVariant(CommonModel):
         """
         logger = logging.getLogger(__name__)
 
-        # Basic model validation
         if not super().is_valid():
-            logger.warning(f"Variant {self.id} failed basic model validation")
             return False
 
-        # Check if the product is valid and active
         if not self.product or not self.product.is_valid():
             logger.warning(f"Variant {self.id} has an invalid or inactive product")
             return False
 
-        # Check if the variant is active and not deleted
         if not self.is_active or self.is_deleted:
             logger.warning(f"Variant {self.id} is not active or has been deleted")
             return False
 
-        # Check if variant has at least one attribute
         if not any([self.color, self.size, self.material, self.style]):
             logger.warning(
                 f"Variant {self.id} is missing required attributes. "
@@ -208,12 +203,10 @@ class ProductVariant(CommonModel):
             )
             return False
 
-        # Validate SKU
         if not self.sku or not self.sku.strip():
             logger.warning(f"Variant {self.id} has an empty or invalid SKU")
             return False
 
-        # Check for duplicate SKU (case-insensitive)
         duplicate_sku = ProductVariant.objects.filter(
             sku__iexact=self.sku,
             product_id=self.product_id
@@ -223,14 +216,12 @@ class ProductVariant(CommonModel):
             logger.warning(f"Variant {self.id} has a duplicate SKU: {self.sku}")
             return False
 
-        # Price validation
         if not isinstance(self.price_adjustment, (int, float, Decimal)):
             logger.warning(
                 f"Variant {self.id} has an invalid price adjustment: {self.price_adjustment}"
             )
             return False
 
-        # For products with inventory tracking
         if self.product.track_inventory:
             if not hasattr(self, 'stock_quantity') or not isinstance(self.stock_quantity, int):
                 logger.warning(f"Variant {self.id} has invalid stock quantity")
@@ -242,7 +233,6 @@ class ProductVariant(CommonModel):
                 )
                 return False
 
-            # Check if variant is in stock if required
             if not self.is_in_stock:
                 logger.info(f"Variant {self.id} is out of stock")
                 return False
@@ -258,16 +248,12 @@ class ProductVariant(CommonModel):
             tuple: (can_delete: bool, reason: str)
         """
 
-        # Check parent class constraints
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
-            logger.warning(f"Variant {self.id} cannot be deleted: {reason}")
             return can_delete, reason
 
         from orders.enums import active_order_statuses
 
-
-        # Get active order items with this variant
         active_order_items = OrderItem.objects.filter(
             variant=self,
             order__status__in=active_order_statuses
@@ -286,7 +272,6 @@ class ProductVariant(CommonModel):
             logger.warning(message)
             return False, message
 
-        # Check if this is the last variant of the product
         if not self.product.has_variants:
             other_variants = ProductVariant.objects.filter(
                 product=self.product
@@ -305,21 +290,18 @@ class ProductVariant(CommonModel):
 
     def save(self, *args, **kwargs):
         """Override save to handle variant-specific logic"""
-        # Ensure price adjustment is a Decimal
         if not isinstance(self.price_adjustment, Decimal):
             try:
                 self.price_adjustment = Decimal(str(self.price_adjustment))
             except (TypeError, ValueError, InvalidOperation):
                 self.price_adjustment = Decimal('0.00')
 
-        # Ensure stock quantity is an integer
         if hasattr(self, 'stock_quantity') and not isinstance(self.stock_quantity, int):
             try:
                 self.stock_quantity = int(self.stock_quantity)
             except (TypeError, ValueError):
                 self.stock_quantity = 0
 
-        # Auto-generate SKU if not provided
         if not self.sku and self.product:
             base_sku = self.product.sku or f"PRD{self.product_id:06d}"
             attr_parts = []
@@ -401,26 +383,6 @@ class ProductVariant(CommonModel):
         self.stock_quantity = new_quantity
         self.save(update_fields=['stock_quantity', 'date_updated'])
 
-    def clean(self):
-        """Validate variant data"""
-        super().clean()
-
-        # Ensure at least one attribute is set
-        if not any([self.color, self.size, self.material, self.style]):
-            raise ValidationError(
-                _("Variant must have at least one attribute (color, size, material, or style)")
-            )
-
-        # Validate SKU uniqueness
-        if ProductVariant.objects.filter(
-                sku__iexact=self.sku
-        ).exclude(pk=self.pk).exists():
-            raise ValidationError({'sku': _("Variant SKU must be unique")})
-
-        # Validate stock quantity
-        if self.stock_quantity < 0:
-            raise ValidationError(_("Stock quantity cannot be negative"))
-
 
 class ProductImage(CommonModel):
     product = models.ForeignKey(
@@ -428,7 +390,9 @@ class ProductImage(CommonModel):
         on_delete=models.PROTECT,
         related_name='product_images',
         verbose_name=_("Product"),
-        help_text=_("The product this image belongs to")
+        help_text=_("The product this image belongs to"),
+        null=True,
+        blank=True
     )
     image = models.ImageField(
         upload_to='products/',
@@ -483,13 +447,10 @@ class ProductImage(CommonModel):
         """Additional model validation"""
         super().clean()
 
-        # Ensure only one primary image per product
         if self.is_primary and not self.is_deleted:
-            # Check if there's already a primary image for this product
             existing_primary = ProductImage.objects.filter(
                 product=self.product,
                 is_primary=True,
-                is_deleted=False
             ).exclude(pk=self.pk).exists()
 
             if existing_primary:
@@ -505,24 +466,18 @@ class ProductImage(CommonModel):
         """
         logger = logging.getLogger(__name__)
 
-        # Basic model validation
         if not super().is_valid():
-            logger.warning(f"Image {self.id} failed basic model validation")
             return False
 
-        # Check required fields
         if not all([self.product, self.image]):
             logger.warning(f"Image {self.id} is missing required fields")
             return False
 
-        # Validate image file
         try:
-            # Check if image file exists and is accessible
             if not self.image.storage.exists(self.image.name):
                 logger.warning(f"Image file not found: {self.image.name}")
                 return False
 
-            # Check image dimensions (min 100x100px)
             from PIL import Image
             with Image.open(self.image) as img:
                 width, height = img.size
@@ -533,7 +488,6 @@ class ProductImage(CommonModel):
                     )
                     return False
 
-                # Check aspect ratio (between 0.5 and 2.0)
                 aspect_ratio = width / height
                 if not 0.5 <= aspect_ratio <= 2.0:
                     logger.warning(
@@ -546,17 +500,14 @@ class ProductImage(CommonModel):
             logger.error(f"Error validating image {self.id}: {str(e)}", exc_info=True)
             return False
 
-        # Validate alt text if provided
         if self.alt_text and len(self.alt_text.strip()) > 200:
             logger.warning(f"Image {self.id} alt text exceeds 200 characters")
             return False
 
-        # If this is set as primary, ensure it's valid
         if self.is_primary and self.is_deleted:
             logger.warning(f"Deleted image {self.id} cannot be set as primary")
             return False
 
-        logger.debug(f"Image {self.id} validation successful")
         return True
 
     def can_be_deleted(self) -> tuple[bool, str]:
@@ -566,25 +517,18 @@ class ProductImage(CommonModel):
         Returns:
             tuple: (can_delete: bool, reason: str)
         """
-        # Check parent class constraints
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
-            logger.warning(f"Image {self.id} cannot be deleted: {reason}")
             return can_delete, reason
 
-        # Check if this is the only image for the product
-        other_images = self.product.product_images.filter(
-            is_deleted=False
-        ).exclude(pk=self.pk)
+        other_images = self.product.product_images.all().exclude(pk=self.pk)
 
         if not other_images.exists() and self.product.status == ProductStatus.PUBLISHED:
             message = "Cannot delete the only image of a published product"
             logger.warning(f"{message} (Product ID: {self.product_id})")
             return False, message
 
-        # Check if this is the primary image
         if self.is_primary and other_images.exists():
-            # Set another image as primary before deletion
             try:
                 new_primary = other_images.first()
                 new_primary.is_primary = True
@@ -600,7 +544,6 @@ class ProductImage(CommonModel):
                 )
                 return False, "Failed to set a new primary image"
 
-        logger.info(f"Image {self.id} can be safely deleted")
         return True, ""
 
     def save(self, *args, **kwargs):
@@ -609,7 +552,6 @@ class ProductImage(CommonModel):
         if not self.pk and not self.is_primary:
             self.is_primary = not self.product.product_images.filter(
                 is_primary=True,
-                is_deleted=False
             ).exists()
 
         super().save(*args, **kwargs)
@@ -629,7 +571,7 @@ class ProductImage(CommonModel):
         try:
             return self.image.url
         except ValueError:
-            return f"{settings.MEDIA_ROOT}/products/default-product.png"  # Fallback image
+            return f"{settings.MEDIA_ROOT}/products/default-product.png"
 
     @property
     def dimensions(self):
@@ -637,7 +579,7 @@ class ProductImage(CommonModel):
         try:
             from PIL import Image
             with Image.open(self.image) as img:
-                return img.size  # Returns (width, height)
+                return img.size
         except:
             return None
 
@@ -865,7 +807,6 @@ class Product(SlugFieldCommonModel):
             models.Index(fields=['manufacturing_date']),
             models.Index(fields=['manufacturing_cost']),
 
-            # Composite manufacturing indexes
             models.Index(fields=['manufacturing_date', 'manufacturing_location']),
             models.Index(fields=['product_type', 'manufacturing_location']),
         ]
@@ -890,7 +831,6 @@ class Product(SlugFieldCommonModel):
         ordering = ['product_name']
 
     def save(self, *args, **kwargs):
-        # Auto-update stock_status based on variants
         if self.track_inventory and getattr(self, "has_variants", False) and self.has_variants:
             total_stock = self.total_stock_quantity
             if total_stock == 0:
@@ -900,7 +840,6 @@ class Product(SlugFieldCommonModel):
             else:
                 self.stock_status = StockStatus.IN_STOCK
 
-        # Handle digital products
         if not self.track_inventory:
             self.stock_status = StockStatus.IN_STOCK
 
@@ -914,12 +853,9 @@ class Product(SlugFieldCommonModel):
         """
         logger = logging.getLogger(__name__)
 
-        # Basic model validation
         if not super().is_valid():
-            logger.warning(f"Product {self.id} failed basic model validation")
             return False
 
-        # Required fields validation
         required_fields = {
             'product_name': self.product_name,
             'product_description': self.product_description,
@@ -931,17 +867,14 @@ class Product(SlugFieldCommonModel):
                 logger.warning(f"Product {self.id} is missing required field: {field}")
                 return False
 
-        # Status check
         if self.status != ProductStatus.PUBLISHED:
             logger.info(f"Product {self.id} is not published (status: {self.status})")
             return False
 
-        # Price validation
         if not isinstance(self.price, (int, float, Decimal)) or self.price <= 0:
             logger.warning(f"Product {self.id} has invalid price: {self.price}")
             return False
 
-        # Digital product validation
         if self.product_type == ProductType.DIGITAL:
             if not self.download_file:
                 logger.warning(f"Digital product {self.id} is missing download file")
@@ -950,7 +883,6 @@ class Product(SlugFieldCommonModel):
                 logger.warning(f"Digital product {self.id} has invalid file size")
                 return False
 
-        # Service product validation
         if self.product_type == ProductType.SERVICE:
             if (self.location_required and
                     self.service_type in [ServiceType.CONSULTATION, ServiceType.REPAIR,
@@ -959,9 +891,8 @@ class Product(SlugFieldCommonModel):
                 logger.warning(f"Service product {self.id} requires a location but none is set")
                 return False
 
-        # Variant validation
         if self.has_variants:
-            active_variants = self.product_variants.filter(is_deleted=False, is_active=True)
+            active_variants = self.product_variants.all()
             if not active_variants.exists():
                 logger.warning(f"Product {self.id} has no active variants")
                 return False
@@ -991,12 +922,8 @@ class Product(SlugFieldCommonModel):
         Returns:
             tuple: (can_delete: bool, reason: str)
         """
-        logger = logging.getLogger(__name__)
-
-        # Check parent class constraints
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
-            logger.warning(f"Product {self.id} cannot be deleted: {reason}")
             return can_delete, reason
 
         if self.has_variants:
@@ -1009,14 +936,12 @@ class Product(SlugFieldCommonModel):
                 logger.warning(message)
                 return False, message
 
-            # Check variant-specific constraints
             for variant in active_variants:
                 can_delete, reason = variant.can_be_deleted()
                 if not can_delete:
                     logger.warning(f"Product {self.id} has variant {variant.id} that cannot be deleted: {reason}")
                     return False, f"Variant {variant.id}: {reason}"
 
-        # Check for active promotions
         if hasattr(self, 'coupons'):
             active_coupons = self.coupons.filter(
                 is_active=True,
@@ -1030,7 +955,6 @@ class Product(SlugFieldCommonModel):
                 logger.warning(message)
                 return False, message
 
-        # Check for active orders
         if hasattr(self, 'order_items'):
             from orders.enums import active_order_statuses
             active_orders = self.order_items.filter(
@@ -1045,7 +969,6 @@ class Product(SlugFieldCommonModel):
                 logger.warning(message)
                 return False, message
 
-        logger.info(f"Product {self.id} can be safely deleted")
         return True, ""
 
     @property
@@ -1127,7 +1050,7 @@ class Product(SlugFieldCommonModel):
         if base_cost > 0:
             total_cost *= Decimal('1.05')  # 5% handling/storage margin
 
-        return total_cost.quantize(Decimal('0.01'))  # Round to 2 decimal places
+        return total_cost.quantize(Decimal('0.01'))
 
     def get_manufacturing_info(self) -> dict:
         """Get comprehensive manufacturing information"""
@@ -1161,12 +1084,11 @@ class Product(SlugFieldCommonModel):
             return None
 
         from django.db.models import Min, Max
-        result = self.product_variants.filter(
-            is_deleted=False, is_active=True
-        ).aggregate(
-            min_adjustment=Min('price_adjustment'),
-            max_adjustment=Max('price_adjustment')
-        )
+        result = (self.product_variants.all()
+                .aggregate(
+                min_adjustment=Min('price_adjustment'),
+                max_adjustment=Max('price_adjustment')
+        ))
 
         base_price = float(self.price)
         min_final = base_price + float(result['min_adjustment'] or 0)
@@ -1180,9 +1102,7 @@ class Product(SlugFieldCommonModel):
 
     def get_available_variants(self):
         """Get all active variants with stock information"""
-        return self.product_variants.filter(
-            is_deleted=False, is_active=True
-        ).select_related('product') if self.has_variants else []
+        return self.product_variants.all().select_related('product') if self.has_variants else []
 
     def validate_purchase(self, quantity=1, color=None, size=None):
         """Validate if product can be purchased"""
@@ -1215,23 +1135,19 @@ class Product(SlugFieldCommonModel):
         """Validation"""
         super().clean()
 
-        # Validate sale dates
         if self.sale_start_date and self.sale_end_date:
             if self.sale_start_date >= self.sale_end_date:
                 raise ValidationError(_("Sale end date must be after start date"))
 
-        # Validate digital product fields
         if self.product_type == ProductType.DIGITAL:
             if not self.download_file:
                 raise ValidationError(_("Digital products require a download file"))
 
-        # Validate manufacturing date is not in the future
         if self.manufacturing_date and self.manufacturing_date > timezone.now().date():
             raise ValidationError({
                 'manufacturing_date': _("Manufacturing date cannot be in the future")
             })
 
-        # Validate costs are not negative
         cost_fields = ['manufacturing_cost', 'packaging_cost', 'shipping_to_warehouse_cost']
         for field in cost_fields:
             value = getattr(self, field)

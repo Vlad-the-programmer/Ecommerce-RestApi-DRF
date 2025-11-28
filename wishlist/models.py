@@ -204,7 +204,12 @@ class WishListItem(ItemCommonModel):
         verbose_name=_("Wishlist"),
         help_text=_("Wishlist to which this item belongs."),
     )
-
+    product = models.ForeignKey("products.Product", on_delete=models.PROTECT, related_name="wishlist_items")
+    variant = models.ForeignKey("products.ProductVariant",
+                                on_delete=models.PROTECT,
+                                related_name="wishlist_items",
+                                null=True,
+                                blank=True)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,

@@ -212,7 +212,7 @@ class Cart(CommonModel):
 
         if self.status == CART_STATUSES.ACTIVE:
             return False,  "Active carts shouldn't be deleted"
-        if self.cart_items.filter(is_deleted=False).exists():
+        if self.cart_items.exists():
             return False,  "Carts with items shouldn't be deleted"
         return True, ""
 
@@ -224,31 +224,27 @@ class Cart(CommonModel):
         3. All cart items are valid
         4. If a coupon is applied, it's still valid
         """
-        # Check parent class validation
         if not super().is_valid():
             return False
         
-        # Check if cart status is valid
         if self.status not in dict(CART_STATUSES.choices):
             logger.debug(f"Cart validation failed: status ({self.status}) is not valid")
             return False
-        
-        # Check if all cart items are valid
-        if not self.cart_items.filter(is_deleted=False).exists():
-            logger.debug(f"Cart validation failed: cart items don't exist")
-            return False
-        
-        # Check each cart item's validity
-        for item in self.cart_items.filter(is_deleted=False):
-            if not item.is_valid():
-                logger.debug(f"Cart validation failed: cart item ({item.id}) is not valid")
+
+        if self.pk:
+            if not self.cart_items.exists():
+                logger.debug(f"Cart validation failed: cart items don't exist")
                 return False
+
+            for item in self.cart_items.exists():
+                if not item.is_valid():
+                    logger.debug(f"Cart validation failed: cart item ({item.id}) is not valid")
+                    return False
         
-        # If there's a coupon, validate it
-        if self.coupon:
-            if not self.coupon.is_valid(self.get_cart_total()):
-                logger.debug(f"Cart validation failed: coupon ({self.coupon.id}) is not valid")
-                return False
+            if self.coupon:
+                if not self.coupon.is_valid(self.get_cart_total()):
+                    logger.debug(f"Cart validation failed: coupon ({self.coupon.id}) is not valid")
+                    return False
         
         return True
 
@@ -283,12 +279,18 @@ class CartItem(ItemCommonModel):
     """
     objects = CartItemManager()
 
-    cart = models.ForeignKey(Cart, on_delete=models.PROTECT,
-                             null=True, blank=True, related_name="cart_items")
+    cart = models.ForeignKey("cart.Cart", on_delete=models.PROTECT,
+                             related_name="cart_items")
+    product = models.ForeignKey("products.Product", on_delete=models.PROTECT, related_name="cart_items")
+    variant = models.ForeignKey("products.ProductVariant",
+                                on_delete=models.PROTECT,
+                                related_name="cart_items",
+                                null=True,
+                                blank=True)
 
     def __str__(self):
         product_name = getattr(self.product, 'product_name', 'Unknown Product')
-        return f"Cart {self.cart.uuid} - Cart Item - {product_name} - {self.quantity}"
+        return f"Cart {self.cart.uuid if self.cart else 'Unknown Cart'} - Cart Item - {product_name} - {self.quantity}"
 
     class Meta:
         db_table = "cart_items"
@@ -312,11 +314,18 @@ class CartItem(ItemCommonModel):
         """Validate cart item before saving"""
         super().clean()
 
+        if self.cart is None:
+            self.cart = Cart.objects.get_or_create(user=self.user)
+
         if self.cart.is_deleted:
             raise ValidationError(_("Cannot add items to deleted cart"))
 
         if self.cart.status != CART_STATUSES.ACTIVE:
             raise ValidationError(_("Cannot add items to inactive cart"))
+
+    def save(self, *args, **kwargs):
+        kwargs['update_fields'] = kwargs.get('update_fields', []) + ['cart']
+        super().save(*args, **kwargs)
 
     def is_valid(self, *args, **kwargs) -> bool:
         """Check if the cart item is valid by verifying:
@@ -329,50 +338,20 @@ class CartItem(ItemCommonModel):
         Returns:
             bool: True if the cart item is valid, False otherwise.
         """
-        # Check parent class validation
         if not super().is_valid():
             return False
 
-        # Check if cart is valid
         if not hasattr(self, 'cart') or not self.cart or self.cart.is_deleted:
             logger.debug(f"Cart items validation failed. Cart is deleted: \
-                            {self.cart.is_deleted if hasattr(self, 'cart') and self.cart  else None} \
+                            {self.cart.is_deleted if hasattr(self, 'cart') and self.cart else None} \
                             Cart is None: {self.cart is None} \
                             Cart has attribute 'cart': {hasattr(self, 'cart')}")
             return False
             
-        # Check if cart is active
         if self.cart.status != CART_STATUSES.ACTIVE:
             logger.debug(f"Cart items validation failed. Cart status: {self.cart.status}")
             return False
-            
-        # Check if product exists and is valid
-        if not self.product or not self.product.is_valid():
-            logger.debug(f"Cart items validation failed. Product is valid: {self.product.is_valid()}")
-            return False
-            
-        # Check if variant exists and is valid (if specified)
-        if hasattr(self, 'variant') and self.variant and \
-           (not hasattr(self.variant, 'is_valid') or not self.variant.is_valid()):
-            logger.debug(f"Cart items validation failed. Variant is valid: {self.variant.is_valid()}")
-            return False
-            
-        # Check if quantity is valid
-        if self.quantity < 1:
-            logger.debug(f"Cart items validation failed. Quantity is valid: {self.quantity < 1}")
-            return False
-            
-        # Check if product is in stock
-        if hasattr(self.product, 'is_in_stock') and not self.product.is_in_stock():
-            logger.debug(f"Cart items validation failed. Product is in stock: {self.product.is_in_stock()}")
-            return False
-            
-        # Check if variant is in stock (if specified)
-        if hasattr(self, 'variant') and self.variant and \
-           hasattr(self.variant, 'is_in_stock') and not self.variant.is_in_stock():
-            logger.debug(f"Cart items validation failed. Variant is in stock: {self.variant.is_in_stock()}")
-            return False
-            
+
         return True
 
     def can_be_deleted(self) -> tuple[bool, str]:
@@ -381,23 +360,16 @@ class CartItem(ItemCommonModel):
         Returns:
             tuple: (can_delete: bool, reason: str)
         """
-        # Check parent class validation
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
             return False, reason
             
-        # Check if cart exists and is valid
         if not hasattr(self, 'cart') or not self.cart:
             return True, ""
             
-        # Check if cart is in a state that allows item deletion
         if self.cart.status != CART_STATUSES.ACTIVE:
             return False, "Cannot delete items from an inactive cart"
-            
-        # Check if there are any associated orders that prevent deletion
-        if hasattr(self, 'order_items') and hasattr(self.order_items, 'exists') and self.order_items.exists():
-            return False, "Cannot delete cart item associated with an order"
-            
+
         return True, ""
 
 
@@ -610,6 +582,14 @@ class SavedCartItem(ItemCommonModel):
         related_name='saved_cart_items',
         verbose_name=_('Product'),
         help_text=_('Product in the saved cart')
+    )
+    variant = models.ForeignKey(
+        'products.ProductVariant',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='saved_cart_items',
+        help_text=_("Selected variant for this item")
     )
     product_snapshot = models.JSONField(
         _('Product Snapshot'),
