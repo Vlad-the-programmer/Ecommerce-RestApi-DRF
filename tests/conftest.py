@@ -32,7 +32,6 @@ User = get_user_model()
 
 def generate_valid_polish_phone_number():
     """Generate a valid Polish phone number for tests."""
-    # Polish mobile numbers: +48 XXX XXX XXX
     prefixes = ['50', '51', '53', '57', '60', '66', '69', '72', '73', '78', '79', '88']
     prefix = random.choice(prefixes)
     number = ''.join(random.choices(string.digits, k=7))
@@ -233,7 +232,6 @@ def user_with_token(verified_user):
     def _create_user():
         user, profile, email_address, confirmation = verified_user
 
-        # Create DRF auth token
         from rest_framework.authtoken.models import Token
         token, created = Token.objects.get_or_create(user=user)
 
@@ -299,16 +297,14 @@ def verified_user(db, minimal_registration_data):
         email = 'verified@example.com'
         password = minimal_registration_data['password1']
 
-        # Create user - this won't trigger the signal now
         user = User.objects.create_user(
             email=email,
             first_name='Verified',
             last_name='User',
             password=password,
-            is_active=True  # This will be respected
+            is_active=True
         )
 
-        # Create profile
         profile = Profile.objects.create(
             user=user,
             phone_number=generate_valid_polish_phone_number(),
@@ -318,7 +314,6 @@ def verified_user(db, minimal_registration_data):
             is_active=True
         )
 
-        # Create verified email address
         email_address = EmailAddress.objects.create(
             user=user,
             email=user.email,
@@ -326,7 +321,6 @@ def verified_user(db, minimal_registration_data):
             verified=True
         )
 
-        # Create confirmation
         confirmation = EmailConfirmation.create(email_address)
         confirmation.sent = timezone.now()
         confirmation.save()
@@ -344,28 +338,34 @@ def verified_user(db, minimal_registration_data):
 @pytest.fixture
 def admin_user(db):
     """Create an admin user for testing."""
-    user = User.objects.create_superuser(
-        email='admin@gmail.com',
-        password='adminpass123',
-        first_name='Admin',
-        last_name='User'
-    )
+    # Temporarily disconnect the signal
+    post_save.disconnect(receiver=handle_user_creation, sender=settings.AUTH_USER_MODEL)
 
-    # Create profile
-    profile = Profile.objects.create(
-        user=user,
-        phone_number=generate_valid_polish_phone_number(),
-        date_of_birth='1990-01-01',
-        gender=Gender.MALE,
-        country='US',
-        is_active=True
-    )
+    try:
+        user = User.objects.create_superuser(
+            email='admin@gmail.com',
+            password='adminpass123',
+            first_name='Admin',
+            last_name='User',
+            is_active=True,
+            is_staff=True,
+            is_superuser=True
+        )
 
-    profile.is_active = True
-    profile.save(update_fields=['is_active', 'date_updated'])
+        Profile.objects.create(
+            user=user,
+            phone_number=generate_valid_polish_phone_number(),
+            date_of_birth='1990-01-01',
+            gender=Gender.MALE,
+            country='US',
+            is_active=True
+        )
 
-    return user
-
+        user.refresh_from_db()
+        return user
+    finally:
+        # Reconnect the signal
+        post_save.connect(handle_user_creation, sender=settings.AUTH_USER_MODEL)
 
 @pytest.fixture
 def admin_client(admin_user):
@@ -413,7 +413,6 @@ def user_with_different_data(minimal_registration_data):
     return _create_user
 
 
-# URL fixtures
 @pytest.fixture
 def register_url():
     return reverse('userAuth:rest_register')
@@ -455,7 +454,6 @@ def login_url():
 
 @pytest.fixture
 def user_details_url():
-    # return reverse('userAuth:rest_user_details') # Use custom UserViewSet method instead
     def _get_url(pk:uuid.UUID=None):
         if pk is None:
             return ""

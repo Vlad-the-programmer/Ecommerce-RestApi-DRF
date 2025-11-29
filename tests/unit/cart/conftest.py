@@ -164,7 +164,8 @@ def product_factory(db, category_factory, location_factory):
             })
             if 'location' not in kwargs:
                 defaults['location'] = location_factory()
-        
+
+        kwargs["is_active"] = True
         defaults.update(kwargs)
         
         product = Product.objects.create(**defaults)
@@ -182,7 +183,8 @@ def cart_factory(db, verified_user):
             kwargs['user'], _, _, _ = verified_user
             
         defaults = {
-            'status': 'active'
+            'status': 'active',
+            'is_active': True
         }
         defaults.update(kwargs)
         return Cart.objects.create(**defaults)
@@ -201,6 +203,7 @@ def cart_item_factory(db, cart_factory, product_factory):
         defaults = {
             'quantity': 1,
             'price': kwargs['product'].price,
+            'is_active': True,
         }
         defaults.update(kwargs)
         return CartItem.objects.create(**defaults)
@@ -248,6 +251,7 @@ def saved_cart_factory(db, verified_user, cart_factory):
         defaults = {
             'name': 'Saved Cart',
             'is_default': False,
+            'is_active': True,
         }
 
         if 'original_cart' not in kwargs:
@@ -280,6 +284,7 @@ def saved_cart_item_factory(db, saved_cart_factory, product_factory):
                 'sku': kwargs['product'].sku,
             },
             'notes': '',
+            'is_active': True,
         }
         defaults.update(kwargs)
         return SavedCartItem.objects.create(**defaults)

@@ -10,24 +10,30 @@ class LocationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Location
         fields = [
-            'id', 'name', 'street_address', 'city', 'state_province', 
-            'postal_code', 'country', 'is_active', 'date_created', 'date_updated'
+            'id', 'name', 'street', 'address_line_1',
+            'address_line_2', 'house_number',
+            'apartment_number','city', 'state',
+            'zip_code', 'country', 'is_active', 'date_created', 'date_updated'
         ]
         read_only_fields = ['date_created', 'date_updated']
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
     """Serializer for ProductImage model."""
+    product_id = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.all(),
+        required=True,
+    )
     image_url = serializers.SerializerMethodField()
-    thumbnail_url = serializers.SerializerMethodField()
+    # thumbnail_url = serializers.SerializerMethodField()
     
     class Meta:
         model = ProductImage
         fields = [
             'id', 'image', 'image_url', 'thumbnail_url', 'alt_text',
-            'display_order', 'is_primary', 'date_created', 'date_updated'
+            'display_order', 'product_id', 'date_created', 'date_updated'
         ]
-        read_only_fields = ['date_created', 'date_updated']
+        read_only_fields = ['date_created', 'date_updated', 'image_url']
     
     def get_image_url(self, obj):
         if obj.image:
@@ -120,7 +126,7 @@ class ProductDetailSerializer(ProductListSerializer):
             'date_updated'
         ]
     
-    def get_manufacturer_info(self, obj):
+    def get_manufacturer_info(self, obj) -> dict:
         return {
             'manufacturing_location': obj.manufacturing_location,
             'manufacturing_date': obj.manufacturing_date,
@@ -202,7 +208,14 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
         
         for image_data in images_data:
             ProductImage.objects.create(product=product, **image_data)
-        
+
+        subcategories_data = validated_data.pop('subcategories', [])
+
+        product = Product.objects.create(**validated_data)
+
+        if subcategories_data:
+            product.subcategories.set(subcategories_data)
+
         return product
     
     def update(self, instance, validated_data):
@@ -214,7 +227,6 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
         
         instance.save()
         
-        # Update or create variants
         if variants_data is not None:
             # Delete variants not in the request
             variant_ids = [v.get('id') for v in variants_data if 'id' in v]
@@ -223,17 +235,14 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
             for variant_data in variants_data:
                 variant_id = variant_data.pop('id', None)
                 if variant_id:
-                    # Update existing variant
                     variant = instance.product_variants.filter(id=variant_id).first()
                     if variant:
                         for attr, value in variant_data.items():
                             setattr(variant, attr, value)
                         variant.save()
                 else:
-                    # Create new variant
                     ProductVariant.objects.create(product=instance, **variant_data)
         
-        # Update or create images
         if images_data is not None:
             # Delete images not in the request
             image_ids = [i.get('id') for i in images_data if 'id' in i]
@@ -242,14 +251,12 @@ class ProductCreateUpdateSerializer(serializers.ModelSerializer):
             for image_data in images_data:
                 image_id = image_data.pop('id', None)
                 if image_id:
-                    # Update existing image
                     image = instance.product_images.filter(id=image_id).first()
                     if image:
                         for attr, value in image_data.items():
                             setattr(image, attr, value)
                         image.save()
                 else:
-                    # Create new image
                     ProductImage.objects.create(product=instance, **image_data)
         
         return instance

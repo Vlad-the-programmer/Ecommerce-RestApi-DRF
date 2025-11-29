@@ -99,7 +99,6 @@ class CategoryViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
             
-        # Use the regular serializer with many=True for bulk create
         serializer = CategoryBulkCreateSerializer(
             data=request.data['categories'], 
             many=True,
@@ -108,8 +107,7 @@ class CategoryViewSet(ModelViewSet):
         
         serializer.is_valid(raise_exception=True)
         try:
-            with transaction.atomic():
-                categories = serializer.save()
+            categories = serializer.save()
             return Response(
                 CategoryListSerializer(categories, many=True).data,
                 status=status.HTTP_201_CREATED

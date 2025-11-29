@@ -40,4 +40,6 @@ createsuperuser:
 pytest_unit:
 	docker exec ecommerce_api pytest tests/unit
 
+uv_export:
+	uv export > requirements.txt
 

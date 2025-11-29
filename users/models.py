@@ -138,7 +138,6 @@ class UserRoles(CommonModel):
         ]
 
 
-# Core User model for authentication
 class User(AuthCommonModel, AbstractUser):
     objects = CustomUserManager()
 
@@ -167,7 +166,7 @@ class User(AuthCommonModel, AbstractUser):
                              related_name="users")
 
     def __str__(self):
-        role_name = getattr(self.role, 'role', 'No Role') if self.role else "No Role"
+        role_name = getattr(self.role, 'role', 'No Role')
         return f"{self.email} - {role_name}"
 
     class Meta:
@@ -200,13 +199,11 @@ class User(AuthCommonModel, AbstractUser):
         Returns:
             bool: True if the user is valid, False otherwise
         """
-        # Call parent's is_valid first
         if not super().is_valid(*args, **kwargs):
             return False
 
         validation_errors = []
 
-        # Check required fields
         if not self.email or not self.email.strip():
             validation_errors.append("Email is required")
 
@@ -215,7 +212,6 @@ class User(AuthCommonModel, AbstractUser):
         if not self.last_name or not self.last_name.strip():
             validation_errors.append("Last name is required")
 
-        # Check role if provided
         if hasattr(self, 'role') and self.role and self.role.is_deleted:
             validation_errors.append("Assigned role is deleted")
 
@@ -254,7 +250,6 @@ class User(AuthCommonModel, AbstractUser):
         return True, ""
 
 
-# Separate User model for user details
 class Profile(CommonModel):
     objects = ProfileManager()
 

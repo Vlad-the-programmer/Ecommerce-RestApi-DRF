@@ -15,9 +15,9 @@ from rest_framework.routers import DefaultRouter
 # Routers
 from cart.urls import router as cart_router
 from category.urls import router as category_router
+from products.urls import router as product_router
 
 
-# Import settings
 urlpatterns = [
     # Admin
     path('admin/', admin.site.urls),
@@ -54,19 +54,16 @@ urlpatterns = [
 # Create a base router for v1 API
 v1_router = DefaultRouter()
 
-# Include all the app routers under the v1 router
 v1_router.registry.extend(cart_router.registry)
 v1_router.registry.extend(category_router.registry)
+v1_router.registry.extend(product_router.registry)
 
 
-# API Endpoints with versioning
 urlpatterns += [
-    # API v1 endpoints
     path('api/v1/', include((v1_router.urls, 'v1'), namespace='v1')),
 ]
 
 
-# Serve media and static files in development
 if settings.DEBUG:
     from django.contrib.staticfiles.urls import staticfiles_urlpatterns
 

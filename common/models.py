@@ -64,12 +64,12 @@ class CommonModel(models.Model):
     def is_valid(self, *args, **kwargs) -> bool:
         """Check if item is valid.
 
-        Returns:
-            bool: True if the item is active and not deleted, False otherwise
+            Returns:
+                bool: True if the item is active and not deleted, False otherwise
         """
         is_active = self.is_active and not self.is_deleted
-        if is_active:
-            logger.warning(f"{self._meta.verbose_name} {self.id} is not active or has been deleted")
+        if not is_active:
+            logger.warning(f"{self._meta.verbose_name} ID: {self.id} is not active or has been deleted")
             return False
         return True
 
@@ -99,7 +99,6 @@ class CommonModel(models.Model):
                             del kwargs['force_insert']
                             kwargs['force_update'] = True
 
-                        # Only pass update_fields if it's not empty
                         kwargs['update_fields'] = list(set(update_fields))
                     elif 'update_fields' in kwargs:
                         del kwargs['update_fields']
@@ -113,16 +112,16 @@ class CommonModel(models.Model):
 
         except ValidationError as ve:
             logger.error(
-                f"Validation error saving {self._meta.verbose_name} {getattr(self, 'pk', 'NEW')}: {str(ve)}",
+                f"Validation error saving {self._meta.verbose_name} {getattr(self, 'id', 'NEW')}: {str(ve)}",
                 exc_info=True,
-                extra={'model': self._meta.label, 'pk': getattr(self, 'pk', None)}
+                extra={'model': self._meta.label, 'id': getattr(self, 'id', None)}
             )
             raise
         except Exception as e:
             logger.critical(
-                f"Unexpected error saving {self._meta.verbose_name} {getattr(self, 'pk', 'NEW')}: {str(e)}",
+                f"Unexpected error saving {self._meta.verbose_name} {getattr(self, 'id', 'NEW')}: {str(e)}",
                 exc_info=True,
-                extra={'model': self._meta.label, 'pk': getattr(self, 'pk', None)}
+                extra={'model': self._meta.label, 'id': getattr(self, 'id', None)}
             )
             raise
 
@@ -151,7 +150,7 @@ class CommonModel(models.Model):
         # Check if can be deleted
         can_delete, reason = self.can_be_deleted()
         if not can_delete:
-            logger.warning(f"Cannot delete {self._meta.verbose_name} {self.id}: {reason}")
+            logger.warning(f"Cannot delete {self._meta.verbose_name} ID: {self.id}: {reason}")
             raise ValidationError(_(f"Cannot delete {self._meta.verbose_name}: {reason}"))
         logger.warning(f"{self._meta.verbose_name} {self.id} can be safely deleted")
 
@@ -803,7 +802,7 @@ class ItemCommonModel(CommonModel):
 
 class SlugFieldCommonModel(CommonModel):
     """Common model for models with slug field"""
-    slug_fields = []  # List of fields to use for slug generation (must set in child model)
+    slug_fields = []  # List of fields to use for slug generation (must be set in child model)
 
     slug = models.SlugField(
         unique=True,

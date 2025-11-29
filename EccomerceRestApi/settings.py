@@ -7,17 +7,16 @@ from decouple import config
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = config('SECRET_KEY',
                     default='django-insecure--#qd6azas=$(an^)e7w=k42=0e&b9)3)9m4@_s7l+da(0$lh44', cast=str)
 
-# SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=False, cast=bool)
 
 ALLOWED_HOSTS = ["*"]
 ALLOWED_EMAIL_DOMAINS = ['gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com']
+ALLOWED_EMAIL_DOMAINS += ["example.com"] if DEBUG else []
 
-# Application definition
+
 INSTALLED_APPS = [
     'jazzmin',
     'django.contrib.sites',

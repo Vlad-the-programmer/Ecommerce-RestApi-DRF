@@ -119,8 +119,6 @@ class ProductVariant(CommonModel):
         'inventory.WarehouseProfile',
         through='inventory.Inventory',
         related_name='product_variants',
-        null=True,
-        blank=True
     )
 
     color = models.CharField(max_length=50, blank=True, null=True)
@@ -829,6 +827,9 @@ class Product(SlugFieldCommonModel):
             ),
         ]
         ordering = ['product_name']
+
+    def __str__(self):
+        return f"{self.product_name} | {self.product_type} | {self.status} | {self.condition}"
 
     def save(self, *args, **kwargs):
         if self.track_inventory and getattr(self, "has_variants", False) and self.has_variants:

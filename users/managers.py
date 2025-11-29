@@ -78,7 +78,6 @@ class CustomUserManager(BaseUserManager):
 
         user.save(using=self._db)
 
-        # Create a UserRole
         role = (
             UserRole.SUPER_ADMIN if user.is_superuser
             else UserRole.EMPLOYEE if user.is_staff
