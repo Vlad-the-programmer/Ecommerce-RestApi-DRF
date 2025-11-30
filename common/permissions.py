@@ -1,4 +1,6 @@
 from rest_framework import permissions
+from django.utils.translation import gettext_lazy as _
+
 
 
 class IsOwnerOrReadOnly(permissions.BasePermission):
@@ -8,35 +10,13 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
     """
     
     def has_object_permission(self, request, view, obj):
-        # Read permissions are allowed to any request,
-        # so we'll always allow GET, HEAD or OPTIONS requests.
         if request.method in permissions.SAFE_METHODS:
             return True
-            
-        # Instance must have an attribute named 'owner' or 'user'.
-        if hasattr(obj, 'owner'):
-            return obj.owner == request.user
+
         elif hasattr(obj, 'user'):
             return obj.user == request.user
             
-        # Default deny
         return False
-
-
-class IsAdminOrReadOnly(permissions.BasePermission):
-    """
-    Global permission to only allow admin users to edit objects.
-    Non-admin users can only view objects.
-    """
-    
-    def has_permission(self, request, view):
-        # Read permissions are allowed to any request,
-        # so we'll always allow GET, HEAD or OPTIONS requests.
-        if request.method in permissions.SAFE_METHODS:
-            return True
-            
-        # Write permissions are only allowed to admin users.
-        return request.user and request.user.is_staff
 
 
 class IsOwner(permissions.BasePermission):
@@ -46,13 +26,9 @@ class IsOwner(permissions.BasePermission):
     """
     
     def has_object_permission(self, request, view, obj):
-        # Instance must have an attribute named 'owner' or 'user'.
-        if hasattr(obj, 'owner'):
-            return obj.owner == request.user
-        elif hasattr(obj, 'user'):
+        if hasattr(obj, 'user'):
             return obj.user == request.user
             
-        # Default deny
         return False
 
 
@@ -62,15 +38,45 @@ class IsAdminOrOwner(permissions.BasePermission):
     """
     
     def has_object_permission(self, request, view, obj):
-        # Admin users can do anything
         if request.user and request.user.is_staff:
             return True
-            
-        # Instance must have an attribute named 'owner' or 'user'.
-        if hasattr(obj, 'owner'):
-            return obj.owner == request.user
+
         elif hasattr(obj, 'user'):
             return obj.user == request.user
             
-        # Default deny
         return False
+
+
+class IsOwnerOrStaff(permissions.BasePermission):
+    """
+    Permission to only allow owners of an object or staff to access it.
+    """
+    message = _('You do not have permission to access this resource.')
+    
+    def has_permission(self, request, view):
+        # Allow all authenticated users for list/create actions
+        if request.user.is_authenticated:
+            return True
+        return False
+    
+    def has_object_permission(self, request, view, obj):
+        if request.user.is_staff:
+            return True
+
+        elif hasattr(obj, 'user'):
+            return obj.user == request.user
+            
+        return False
+
+
+class IsStaffOrReadOnly(permissions.BasePermission):
+    """
+    The request is authenticated as a staff user, or is a read-only request.
+    """
+    message = _('You do not have permission to perform this action.')
+    
+    def has_permission(self, request, view):
+        return bool(
+            request.method in permissions.SAFE_METHODS or
+            (request.user and request.user.is_staff)
+        )

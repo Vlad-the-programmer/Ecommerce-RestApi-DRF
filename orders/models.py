@@ -262,7 +262,6 @@ class Order(CommonModel):
         blank=True,
         help_text=_("Unique order identifier for customer reference")
     )
-
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -392,17 +391,14 @@ class Order(CommonModel):
         if is_new:
             self.mark_pending()
 
-        # Generate order number only for new orders
         if not self.order_number:
             self.order_number = self.generate_order_number()
 
-            # Ensure uniqueness (extremely rare but possible collision)
             while Order.objects.filter(order_number=self.order_number).exists():
                 self.order_number = self.generate_order_number()
 
             update_fields.append('order_number')
 
-        # Calculate total amount
         self.total_amount = self.get_order_total_amount()
         update_fields.append('total_amount')
         super().save(*args, **kwargs, update_fields=update_fields)
@@ -529,18 +525,15 @@ class Order(CommonModel):
         Returns:
             tuple: (can_delete: bool, reason: str)
         """
-        # Check parent class constraints
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
             return False, reason
 
         from orders.enums import active_order_statuses
 
-        # Check if order has been paid for
         if self.status in active_order_statuses and self.is_active:
             return False, "Cannot delete an active order"
 
-        # Check order items
         if self.order_items.exists():
             for order_item in self.order_items.all():
                 if hasattr(order_item, 'product'):
@@ -548,7 +541,6 @@ class Order(CommonModel):
                     if not can_be_deleted:
                         return False, f"Cannot delete due to product: {reason}"
 
-        # Check invoices
         invoices = self.invoices.filter(is_active=True)
         for invoice in invoices:
             if invoice.payments.exists():
@@ -556,7 +548,6 @@ class Order(CommonModel):
                     return False, "Order has unpaid invoices"
                 return False, "Order has paid invoices"
 
-        # Check shipments
         if hasattr(self, 'shipments') and self.shipments.exists():
             return False, "Order has associated shipments"
 
@@ -577,19 +568,15 @@ class Order(CommonModel):
             OrderStatuses.REFUNDED,
         ]
 
-        # Allow status to stay the same
         if old_status == new_status:
             return True
 
-        # Special case: can cancel from most statuses
         if new_status == OrderStatuses.CANCELLED:
             return True
 
-        # Special case: can refund from completed/delivered
         if new_status == OrderStatuses.REFUNDED:
             return old_status in [OrderStatuses.COMPLETED, OrderStatuses.DELIVERED]
 
-        # Otherwise, can only move forward in the status flow
         try:
             return status_order.index(new_status) > status_order.index(old_status)
         except ValueError:
@@ -668,6 +655,14 @@ class Order(CommonModel):
         self.is_active = False
         self.save(update_fields=["status", "is_active", "date_updated"])
 
+    def mark_refunded(self):
+        """Mark the order as refunded."""
+        self._is_valid_status_transition(self.status, OrderStatuses.REFUNDED)
+
+        self.status = OrderStatuses.REFUNDED
+        self.is_active = False
+        self.save(update_fields=["status", "is_active", "date_updated"])
+
     def mark_paid(self):
         """Mark the order as paid."""
         self._is_valid_status_transition(self.status, OrderStatuses.PAID)
@@ -720,7 +715,9 @@ class Order(CommonModel):
 class OrderStatusHistory(CommonModel):
     objects = OrderStatusHistoryManager()
 
-    order = models.ForeignKey("orders.Order", on_delete=models.PROTECT, related_name="order_status_history")
+    order = models.ForeignKey("orders.Order",
+                              on_delete=models.PROTECT,
+                              related_name="order_status_history")
     status = models.CharField(max_length=20, choices=OrderStatuses.choices, db_index=True)
 
     notes = models.TextField(
@@ -781,12 +778,9 @@ class OrderStatusHistory(CommonModel):
         Returns:
             bool: True if the status history record is valid, False otherwise
         """
-        # Check parent class validation
         if not super().is_valid():
-            logger.warning("OrderStatusHistory validation failed: Parent class validation failed")
             return False
 
-        # Check required fields
         required_fields = {
             'order': self.order_id,
             'status': self.status
@@ -797,12 +791,10 @@ class OrderStatusHistory(CommonModel):
                 logger.warning(f"OrderStatusHistory validation failed: Missing required field {field}")
                 return False
 
-        # Validate status is a valid choice
         if self.status not in dict(OrderStatuses.choices):
             logger.warning(f"OrderStatusHistory validation failed: Invalid status {self.status}")
             return False
 
-        # If this is an update, check if the status is being changed
         if self.pk:
             try:
                 old_status = OrderStatusHistory.objects.get(pk=self.pk).status
@@ -813,7 +805,6 @@ class OrderStatusHistory(CommonModel):
             except OrderStatusHistory.DoesNotExist:
                 pass
 
-        # If changed_by is provided, check the user exists
         if self.changed_by_id and not hasattr(self, 'changed_by'):
             logger.warning("OrderStatusHistory validation failed: Invalid changed_by user")
             return False
@@ -829,16 +820,13 @@ class OrderStatusHistory(CommonModel):
                 - can_delete: True if the record can be deleted, False otherwise
                 - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
         """
-        # Check parent class constraints
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
             return False, reason
 
-        # Prevent deletion of the most recent status history for an order
         try:
             latest_status = OrderStatusHistory.objects.filter(
                 order_id=self.order_id,
-                is_deleted=False
             ).latest('date_created')
 
             if self.pk == latest_status.pk:
@@ -847,7 +835,6 @@ class OrderStatusHistory(CommonModel):
         except OrderStatusHistory.DoesNotExist:
             pass
 
-        # Check if this status is currently active on the order
         if hasattr(self, 'order') and self.order.status == self.status:
             return False, f"Cannot delete active status history for order {self.order.order_number}"
 

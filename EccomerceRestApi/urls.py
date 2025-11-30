@@ -16,6 +16,7 @@ from rest_framework.routers import DefaultRouter
 from cart.urls import router as cart_router
 from category.urls import router as category_router
 from products.urls import router as product_router
+from orders.urls import router as order_router
 
 
 urlpatterns = [
@@ -57,6 +58,7 @@ v1_router = DefaultRouter()
 v1_router.registry.extend(cart_router.registry)
 v1_router.registry.extend(category_router.registry)
 v1_router.registry.extend(product_router.registry)
+v1_router.registry.extend(order_router.registry)
 
 
 urlpatterns += [
