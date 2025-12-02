@@ -44,20 +44,16 @@ class InternationalRate(CommonModel):
         Returns:
             bool: True if the international rate is valid, False otherwise
         """
-        # Call parent's is_valid first
         if not super().is_valid():
             return False
 
-        # Check required fields
         if not all([self.country, self.surcharge is not None]):
             return False
 
-        # Validate surcharge is non-negative
         if self.surcharge < 0:
             return False
 
-        # Check for duplicate active rates for the same country
-        if not self.pk:  # Only check for new instances
+        if not self.pk:
             if InternationalRate.objects.filter(country=self.country).exists():
                 return False
 
@@ -70,12 +66,10 @@ class InternationalRate(CommonModel):
         Returns:
             tuple: (can_delete: bool, reason: str)
         """
-        # Check parent class constraints first
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
             return False, reason
 
-        # Check if this rate is being used by any active shipping classes
         if ShippingClass.objects.filter(available_countries__contains=[self.country]).exists():
             return False, "Cannot delete rate used by active shipping classes"
 
@@ -232,17 +226,10 @@ class ShippingClass(CommonModel):
         verbose_name_plural = _("Shipping Classes")
         ordering = ["base_cost", "estimated_days_min"]
         indexes = CommonModel.Meta.indexes + [
-            # Core shipping class indexes
             models.Index(fields=['shipping_type', 'is_deleted', 'is_active']),
             models.Index(fields=['carrier_type', 'is_deleted', 'is_active']),
-
-            # Cost and delivery speed indexes
             models.Index(fields=['free_shipping_threshold', 'is_deleted', 'is_active']),
-
-            # Operational indexes
             models.Index(fields=['domestic_only', 'is_active', 'is_deleted']),
-
-            # Composite indexes for common queries
             models.Index(fields=['shipping_type', 'carrier_type', 'is_active', 'is_deleted']),
         ]
         constraints = [
@@ -321,25 +308,19 @@ class ShippingClass(CommonModel):
         Returns:
             Calculated shipping cost
         """
-        # Check for free shipping threshold
         if (self.free_shipping_threshold and
                 order_total >= float(self.free_shipping_threshold)):
             return 0.0
 
-        # Calculate base cost + weight-based cost
         total_cost = float(self.base_cost)
 
-        # Calculate weight-based cost
         if self.calculate_order_weight() > 0 and self.cost_per_kg > 0:
             total_cost += float(self.cost_per_kg) * self.calculate_order_weight()
 
-        # Add international surcharge if applicable
         if destination_country_code and self.shipping_type == ShippingType.INTERNATIONAL:
-            # You could add international surcharge logic here
             international_surcharge = self._get_international_surcharge(destination_country_code)
             total_cost += international_surcharge
 
-        # Add insurance cost if not included
         if not self.insurance_included and self.insurance_cost > 0:
             total_cost += float(self.insurance_cost)
 
@@ -354,8 +335,6 @@ class ShippingClass(CommonModel):
         """Check if this shipping class can ship to a specific country"""
         return self.available_countries.filter(
             code=country_code,
-            is_active=True,
-            is_deleted=False
         ).exists()
 
     def can_ship_item(self, weight_kg: float = 0, dimensions: str = None, destination_country_code: str = None) -> \
@@ -374,14 +353,12 @@ class ShippingClass(CommonModel):
         if not self.is_active:
             return False, _("Shipping class is not active")
 
-        # Check country availability
         if destination_country_code and not self.can_ship_to_country(destination_country_code):
             return False, _("Shipping not available to this country")
 
         if self.max_weight_kg and weight_kg > float(self.max_weight_kg):
             return False, _("Item exceeds maximum weight limit")
 
-        # Add dimension validation logic here if needed
         if dimensions and self.max_dimensions:
             # Basic dimension validation could be added
             pass
@@ -410,10 +387,7 @@ class ShippingClass(CommonModel):
     @property
     def available_countries_list(self) -> list:
         """Get list of available country codes"""
-        return list(self.available_countries.filter(
-            is_active=True,
-            is_deleted=False
-        ).values_list('code', flat=True))
+        return list(self.available_countries.values_list('code', flat=True))
 
     @property
     def is_international(self) -> bool:
@@ -462,11 +436,9 @@ class ShippingClass(CommonModel):
         Returns:
             bool: True if the shipping class is valid, False otherwise
         """
-        # Call parent's is_valid first
         if not super().is_valid():
             return False
 
-        # Check required fields
         required_fields = [
             self.name,
             self.base_cost is not None,
@@ -481,7 +453,6 @@ class ShippingClass(CommonModel):
         if not all(required_fields):
             return False
 
-        # Validate numeric fields
         if any([
             self.base_cost < 0,
             self.cost_per_kg < 0,
@@ -493,15 +464,12 @@ class ShippingClass(CommonModel):
         ]):
             return False
 
-        # Validate weight constraints
         if self.max_weight_kg is not None and self.max_weight_kg <= 0:
             return False
 
-        # Validate free shipping threshold if set
         if self.free_shipping_threshold is not None and self.free_shipping_threshold < 0:
             return False
 
-        # For international shipping, check available countries
         if self.shipping_type == ShippingType.INTERNATIONAL and not self.available_countries.exists():
             return False
 
@@ -514,21 +482,16 @@ class ShippingClass(CommonModel):
         Returns:
             tuple: (can_delete: bool, reason: str)
         """
-        # Check parent class constraints first
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
             return False, reason
 
-        # Check if there are any orders using this shipping class
         from orders.models import Order
-        if Order.objects.filter(shipping_class=self, is_deleted=False).exists():
+        if Order.objects.filter(shipping_class=self).exists():
             return False, "Cannot delete shipping class with associated orders"
 
-        # Check if this is the only active shipping class of its type
         if self.is_active and not ShippingClass.objects.filter(
             shipping_type=self.shipping_type,
-            is_active=True,
-            is_deleted=False
         ).exclude(pk=self.pk).exists():
             return False, f"Cannot delete the only active {self.get_shipping_type_display()} shipping class"
 
@@ -540,19 +503,16 @@ class ShippingClass(CommonModel):
 
         super().clean()
 
-        # Validate estimated days
         if self.estimated_days_min > self.estimated_days_max:
             raise ValidationError({
                 'estimated_days_min': _("Minimum estimated days cannot be greater than maximum estimated days")
             })
 
-        # Validate free shipping threshold
         if self.free_shipping_threshold and self.free_shipping_threshold <= 0:
             raise ValidationError({
                 'free_shipping_threshold': _("Free shipping threshold must be greater than 0")
             })
 
-        # Validate weight limits
         if self.max_weight_kg and self.max_weight_kg <= 0:
             raise ValidationError({
                 'max_weight_kg': _("Maximum weight must be greater than 0")

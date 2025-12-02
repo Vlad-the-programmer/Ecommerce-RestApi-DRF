@@ -1,14 +1,13 @@
 from django.db import models
 from django.db.models import Avg, Count
 
+from common.managers import SoftDeleteManager
 
-class ReviewManager(models.Manager):
+
+class ReviewManager(SoftDeleteManager):
     """
     Simple manager for Review model with soft deletion support.
     """
-
-    def get_queryset(self):
-        return super().get_queryset().filter(is_deleted=False)
 
     def for_product(self, product):
         """Get all reviews for a specific product"""

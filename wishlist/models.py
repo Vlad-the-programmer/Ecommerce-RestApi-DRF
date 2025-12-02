@@ -120,10 +120,9 @@ class Wishlist(CommonModel):
 
     def clean(self):
         super().clean()
-        # Ensure user doesn't have multiple active wishlists
+
         if not self.pk and Wishlist.objects.filter(
                 user=self.user,
-                is_deleted=False
         ).exists():
             raise ValidationError(
                 {"user": _("User can only have one active wishlist.")}
@@ -131,7 +130,6 @@ class Wishlist(CommonModel):
 
     def add_item(self, product, variant=None, quantity=1, note="", priority=WishListItemPriority.MEDIUM):
         """Add item to wishlist with validation."""
-        # Check if item already exists
         existing_item = WishListItem.objects.filter(
             wishlist=self,
             product=product,
@@ -139,14 +137,12 @@ class Wishlist(CommonModel):
         ).first()
 
         if existing_item:
-            # Update existing item
             existing_item.quantity = quantity
             existing_item.note = note
             existing_item.priority = priority
             existing_item.save()
             return existing_item, False
         else:
-            # Create new item
             item = WishListItem.objects.create(
                 wishlist=self,
                 product=product,
@@ -154,7 +150,7 @@ class Wishlist(CommonModel):
                 quantity=quantity,
                 note=note,
                 priority=priority,
-                user=self.user  # Auto-set user
+                user=self.user
             )
             return item, True
 
@@ -164,9 +160,8 @@ class Wishlist(CommonModel):
             item = self.wishlist_items.get(
                 product=product,
                 variant=variant,
-                is_deleted=False
             )
-            item.delete()  # Soft delete
+            item.delete()
             return True
         except WishListItem.DoesNotExist:
             return False
@@ -230,7 +225,7 @@ class WishListItem(ItemCommonModel):
         default=1,
         choices=WishListItemPriority.choices,
         verbose_name=_("Priority"),
-        help_text=_("How important this item is to the user."),
+        help_text=_("How important this item is to the user from 1 to 3."),
     )
 
     class Meta:
@@ -279,31 +274,25 @@ class WishListItem(ItemCommonModel):
         is_valid = True
         validation_errors = []
 
-        # Check base class validation (is_active, is_deleted, etc.)
         if not super().is_valid():
             is_valid = False
             validation_errors.append("Base validation failed (inactive or deleted)")
 
-        # Product is required
         if not self.product:
             is_valid = False
             validation_errors.append("Product is required")
-        # Product must be active and not deleted
         elif self.product.is_deleted or not self.product.is_active:
             is_valid = False
             validation_errors.append("Product is inactive or deleted")
 
-        # If variant is specified, it must be valid
         if self.variant and (self.variant.is_deleted or not self.variant.is_active):
             is_valid = False
             validation_errors.append("Variant is inactive or deleted")
 
-        # Wishlist must be valid if set
         if self.wishlist and not self.wishlist.is_valid():
             is_valid = False
             validation_errors.append("Associated wishlist is invalid")
 
-        # Quantity must be at least 1
         if self.quantity < 1:
             is_valid = False
             validation_errors.append("Quantity must be at least 1")
@@ -325,12 +314,10 @@ class WishListItem(ItemCommonModel):
                 - can_delete: True if the item can be deleted, False otherwise
                 - reason: Empty string if can_delete is True, otherwise the reason why it can't be deleted
         """
-        # Check base class can_be_deleted
         base_can_delete, reason = super().can_be_deleted()
         if not base_can_delete:
             return False, reason
 
-        # Additional business rules for wishlist items
         if hasattr(self, 'order_items') and self.order_items.exists():
             return False, "Cannot delete wishlist item associated with orders"
             
@@ -342,32 +329,27 @@ class WishListItem(ItemCommonModel):
         """
         super().clean()
 
-        # Auto-set user from wishlist if not set
         if self.wishlist and not self.user:
             self.user = self.wishlist.user
 
-        # Ensure wishlist belongs to the user (if both are set)
         if self.wishlist and self.user and self.wishlist.user != self.user:
             raise ValidationError(
                 {"wishlist": _("Wishlist must belong to the user.")}
             )
 
-        # Can't add deleted or inactive products
         if self.product and (self.product.is_deleted or not self.product.is_active):
             raise ValidationError(
                 {"product": _("Cannot add inactive or deleted product to wishlist.")}
             )
 
-        # Can't add deleted variant
         if self.variant and (self.variant.is_deleted or not self.variant.is_active):
             raise ValidationError(
                 {"variant": _("Cannot add inactive or deleted variant to wishlist.")}
             )
 
-        # Validate priority range
-        if self.priority < 1 or self.priority > 5:  # Assuming 1-5 scale
+        if self.priority < 1 or self.priority > 3:  # Assuming 1-5 scale
             raise ValidationError(
-                {"priority": _("Priority must be between 1 and 5.")}
+                {"priority": _("Priority must be between 1 and 3.")}
             )
 
 

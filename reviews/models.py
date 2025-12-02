@@ -88,11 +88,9 @@ class Review(CommonModel):
         """
         validation_errors = []
 
-        # Call parent's is_valid first
         if not super().is_valid():
             validation_errors.append("Base validation failed (inactive or deleted)")
 
-        # Check required fields
         if not self.user_id:
             validation_errors.append("User is required")
         if not self.product_id:
@@ -100,7 +98,6 @@ class Review(CommonModel):
         if self.rating is None:
             validation_errors.append("Rating is required")
 
-        # Rating validation
         try:
             rating = Decimal(str(self.rating)) if not isinstance(self.rating, Decimal) else self.rating
             if not (Decimal('0.00') <= rating <= Decimal('5.00')):
@@ -108,26 +105,21 @@ class Review(CommonModel):
         except (ValueError, DecimalException, TypeError) as e:
             validation_errors.append(f"Invalid rating value: {self.rating} ({str(e)})")
 
-        # Content validation
         if self.content and not self.content.strip():
             validation_errors.append("Content cannot be empty if provided")
 
-        # Title validation
         if self.title and len(self.title) > 255:
             validation_errors.append(f"Title cannot exceed 255 characters (got {len(self.title)})")
 
-        # User validation
         if hasattr(self, 'user') and (not self.user or not self.user.is_active):
             validation_errors.append("User is inactive or does not exist")
 
-        # Product validation
         if hasattr(self, 'product'):
             if not self.product:
                 validation_errors.append("Product does not exist")
             elif self.product.is_deleted:
                 validation_errors.append("Cannot review a deleted product")
 
-        # Log validation errors if any
         if validation_errors:
             logger.warning(
                 f"Review validation failed for {self} - User: {getattr(self, 'user_id', 'None')}, "
@@ -144,7 +136,6 @@ class Review(CommonModel):
         """
         super().clean()
         
-        # Convert rating to Decimal if it's not already
         try:
             if self.rating is not None:
                 self.rating = Decimal(str(self.rating)).quantize(Decimal('0.01'))
@@ -153,19 +144,16 @@ class Review(CommonModel):
                 'rating': _("Rating must be a valid number.")
             }) from e
             
-        # Validate rating range
         if self.rating is not None and (self.rating < 0 or self.rating > 5):
             raise ValidationError({
                 'rating': _("Rating must be between 0.00 and 5.00.")
             })
             
-        # Validate content length if provided
         if self.content and len(self.content.strip()) == 0:
             raise ValidationError({
                 'content': _("Content cannot be empty if provided.")
             })
             
-        # Validate title length if provided
         if self.title and len(self.title.strip()) > 255:
             raise ValidationError({
                 'title': _("Title cannot exceed 255 characters.")
@@ -178,18 +166,13 @@ class Review(CommonModel):
         Returns:
             tuple: (can_delete: bool, reason: str)
         """
-        # Check base class can_be_deleted first
         base_can_delete, reason = super().can_be_deleted()
         if not base_can_delete:
             return False, reason
 
-        # Check if review is already deleted
-        if self.is_deleted:
-            return False, "Review is already deleted"
-
         # Additional business rules can be added here
         # For example, prevent deletion of reviews that are too old
-        max_days_to_delete = 30  # Example: Allow deletion within 30 days
+        max_days_to_delete = 30
         if (timezone.now() - self.date_created).days > max_days_to_delete:
             return False, f"Cannot delete reviews older than {max_days_to_delete} days"
 

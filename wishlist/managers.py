@@ -80,7 +80,6 @@ class WishListManager(SoftDeleteManager):
         
         with transaction.atomic():
             for wishlist_item in wishlist_items:
-                # Get or create cart item
                 cart_item, created = CartItem.objects.get_or_create(
                     cart=cart,
                     product=wishlist_item.product,
@@ -91,7 +90,6 @@ class WishListManager(SoftDeleteManager):
                     }
                 )
                 
-                # If cart item already exists, update quantity
                 if not created:
                     cart_item.quantity += wishlist_item.quantity
                     cart_item.save(update_fields=['quantity'])
@@ -99,7 +97,6 @@ class WishListManager(SoftDeleteManager):
                 cart_items.append((cart_item, created))
                 wishlist_items_to_delete.append(wishlist_item)
             
-            # Delete wishlist items in bulk
             if wishlist_items_to_delete:
                 from .models import WishListItem
                 WishListItem.objects.filter(
