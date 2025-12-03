@@ -3,7 +3,6 @@ from rest_framework import serializers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
-from django.db import transaction
 
 from common.permissions import IsAdminOrReadOnly
 from .models import Category

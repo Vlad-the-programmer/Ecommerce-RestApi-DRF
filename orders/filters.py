@@ -99,16 +99,11 @@ class OrderStatusHistoryFilter(django_filters.FilterSet):
 
 
 class OrderTaxFilter(django_filters.FilterSet):
-    order = django_filters.NumberFilter(field_name='order__id')
-    tax = django_filters.NumberFilter(field_name='tax__id')
-    rate_lte = django_filters.NumberFilter(field_name='rate', lookup_expr='lte')
-    rate_gte = django_filters.NumberFilter(field_name='rate', lookup_expr='gte')
+    order = django_filters.NumberFilter(field_name='order__id', lookup_expr='exact')
+    tax = django_filters.NumberFilter(field_name='tax__id', lookup_expr='exact')
+    rate__lte = django_filters.NumberFilter(field_name='rate', lookup_expr='lte')
+    rate__gte = django_filters.NumberFilter(field_name='rate', lookup_expr='gte')
 
     class Meta:
         model = OrderTax
-        fields = {
-            'order': ['exact'],
-            'tax': ['exact'],
-            'rate_lte': ['lte'],
-            'rate_gte': ['gte'],
-        }
+        fields = ('order', 'tax', 'rate__lte', 'rate__gte')

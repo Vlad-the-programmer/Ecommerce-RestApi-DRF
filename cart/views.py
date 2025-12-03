@@ -10,7 +10,7 @@ from .serializers import (
     CouponSerializer, SavedCartSerializer,
     SavedCartItemSerializer, ApplyCouponSerializer
 )
-from common.permissions import IsOwnerOrReadOnly, IsAdminOrReadOnly
+from common.permissions import IsOwnerOrReadOnly
 
 
 class CartViewSet(viewsets.ModelViewSet):

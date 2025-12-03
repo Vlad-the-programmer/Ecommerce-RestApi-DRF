@@ -17,6 +17,7 @@ from cart.urls import router as cart_router
 from category.urls import router as category_router
 from products.urls import router as product_router
 from orders.urls import router as order_router
+from payments.urls import router as payment_router
 
 
 urlpatterns = [
@@ -52,13 +53,13 @@ urlpatterns = [
 ]
 
 
-# Create a base router for v1 API
 v1_router = DefaultRouter()
 
 v1_router.registry.extend(cart_router.registry)
 v1_router.registry.extend(category_router.registry)
 v1_router.registry.extend(product_router.registry)
 v1_router.registry.extend(order_router.registry)
+v1_router.registry.extend(payment_router.registry)
 
 
 urlpatterns += [

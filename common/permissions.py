@@ -80,3 +80,16 @@ class IsStaffOrReadOnly(permissions.BasePermission):
             request.method in permissions.SAFE_METHODS or
             (request.user and request.user.is_staff)
         )
+
+
+class IsAdminOrReadOnly(permissions.BasePermission):
+    """
+    Permission to only allow admin users or read-only access.
+    """
+    message = _('You do not have permission to perform this action.')
+
+    def has_permission(self, request, view):
+        return bool(
+            request.method in permissions.SAFE_METHODS or
+            (request.user and request.user.is_staff)
+        )

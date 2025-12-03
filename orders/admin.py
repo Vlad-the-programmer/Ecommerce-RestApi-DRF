@@ -3,12 +3,10 @@ from django.utils.translation import gettext_lazy as _
 from django.utils.html import format_html
 from django.urls import reverse
 from django.utils.safestring import mark_safe
-from django.db.models import Sum, F, DecimalField, Count
-from django.db.models.functions import Coalesce
 
 from orders.models import Order, OrderItem, OrderTax, OrderStatusHistory
 from orders.enums import OrderStatuses
-from orders.filters import OrderFilter, OrderItemFilter, OrderStatusHistoryFilter, OrderTaxFilter
+from orders.filters import OrderItemFilter, OrderStatusHistoryFilter, OrderTaxFilter
 
 
 class OrderItemInline(admin.TabularInline):
@@ -48,7 +46,6 @@ class OrderStatusHistoryInline(admin.TabularInline):
     readonly_fields = ('status', 'notes', 'changed_by', 'date_created')
     fields = ('status', 'notes', 'changed_by', 'date_created')
     show_change_link = True
-
 
 
 @admin.register(Order)
@@ -176,7 +173,6 @@ class OrderAdmin(admin.ModelAdmin):
     view_order_in_admin.short_description = ''
     view_order_in_admin.allow_tags = True
     
-    # Custom actions
     def mark_as_paid(self, request, queryset):
         updated = 0
         for order in queryset:
@@ -234,13 +230,20 @@ class OrderAdmin(admin.ModelAdmin):
 
 @admin.register(OrderItem)
 class OrderItemAdmin(admin.ModelAdmin):
-    list_display = ('id', 'order_link', 'product_link', 'variant_link', 'quantity', 'display_total_price', 'date_created')
-    list_filter = (OrderItemFilter, 'date_created')
+    list_display = ('id', 'order_link', 'product_link',
+                    'variant_link', 'quantity',
+                    'display_total_price', 'date_created')
+    list_filter = (
+        'product',
+        'variant',
+        'date_created',
+    )
     search_fields = (
         'order__order_number', 'product__name', 'variant__name',
         'product__sku', 'variant__sku'
     )
-    readonly_fields = ('order_link', 'product_link', 'variant_link', 'quantity', 'display_total_price', 'date_created')
+    readonly_fields = ('order_link', 'product_link', 'variant_link',
+                       'quantity', 'display_total_price', 'date_created')
     list_select_related = ('order', 'product', 'variant')
     
     def order_link(self, obj):
@@ -273,10 +276,17 @@ class OrderItemAdmin(admin.ModelAdmin):
 
 @admin.register(OrderTax)
 class OrderTaxAdmin(admin.ModelAdmin):
-    list_display = ('id', 'order_link', 'name', 'display_rate', 'display_amount', 'display_tax_value', 'display_amount_with_taxes')
-    list_filter = (OrderTaxFilter, 'name', 'date_created')
+    list_display = ('id', 'order_link', 'name', 'display_rate',
+                    'display_amount', 'display_tax_value',
+                    'display_amount_with_taxes')
+    list_filter = (
+        'name',
+        'date_created',
+    )
     search_fields = ('order__order_number', 'name')
-    readonly_fields = ('order_link', 'name', 'display_rate', 'display_amount', 'display_tax_value', 'display_amount_with_taxes', 'date_created')
+    readonly_fields = ('order_link', 'name', 'display_rate',
+                       'display_amount', 'display_tax_value',
+                       'display_amount_with_taxes', 'date_created')
     
     def order_link(self, obj):
         url = reverse('admin:orders_order_change', args=[obj.order_id])
@@ -301,11 +311,13 @@ class OrderTaxAdmin(admin.ModelAdmin):
     display_amount_with_taxes.short_description = _('Amount with Taxes')
 
 
-
 @admin.register(OrderStatusHistory)
 class OrderStatusHistoryAdmin(admin.ModelAdmin):
     list_display = ('id', 'order_link', 'status_display', 'changed_by_display', 'date_created')
-    list_filter = (OrderStatusHistoryFilter, 'status', 'date_created')
+    list_filter = (
+        'status',
+        'date_created',
+    )
     search_fields = ('order__order_number', 'changed_by__email', 'changed_by__username', 'notes')
     readonly_fields = ('order_link', 'status_display', 'changed_by_display', 'notes', 'date_created')
     list_select_related = ('order', 'changed_by')
@@ -313,6 +325,7 @@ class OrderStatusHistoryAdmin(admin.ModelAdmin):
     def order_link(self, obj):
         url = reverse('admin:orders_order_change', args=[obj.order_id])
         return format_html('<a href="{}">{}</a>', url, obj.order.order_number)
+
     order_link.short_description = _('Order')
     order_link.admin_order_field = 'order__order_number'
     

@@ -92,7 +92,6 @@ def category_factory(db):
             'is_active': True
         }
         defaults.update(kwargs)
-        # Create the category without using create() to avoid the force_insert issue
         category = Category(**defaults)
         category.save()
         return category
