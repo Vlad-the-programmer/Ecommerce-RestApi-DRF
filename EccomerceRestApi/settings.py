@@ -428,18 +428,16 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-# User model
 AUTH_USER_MODEL = "users.User"
 
 
-# Email backend for development
 if DEBUG:
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 
     SITE_DOMAIN = 'localhost:8000'
-    SITE_NAME = 'Localhost'
+    SITE_NAME = 'Ecommerce Website'
+    SITE_URL = 'https://your-ecommerce-site.com'
 
-    # Ensure the logs directory exists
     log_dir = BASE_DIR / "logs"
     log_dir.mkdir(exist_ok=True)
 else:

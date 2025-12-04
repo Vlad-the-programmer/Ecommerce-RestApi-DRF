@@ -77,7 +77,6 @@ def order_factory(db, verified_user, cart_factory, product_factory, cart_item_fa
             cart_item_factory(cart=cart, product=product, quantity=2)
             kwargs['cart'] = cart
         
-        # Set default values
         defaults = {
             'user': verified_user,
             'status': OrderStatuses.PENDING,

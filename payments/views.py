@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import OrderingFilter, SearchFilter
 
+from common.permissions import IsAdminOrReadOnly
 from payments.models import Payment
 from payments.serializers import (
     PaymentSerializer,
@@ -21,7 +22,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
     """
     queryset = Payment.objects.all()
     serializer_class = PaymentSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated, IsAdminOrReadOnly]
     filter_backends = [DjangoFilterBackend, OrderingFilter, SearchFilter]
     filterset_fields = {
         'status': ['exact', 'in'],
