@@ -32,7 +32,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
         'user': ['exact'],
         'invoice': ['exact'],
     }
-    ordering_fields = ['transaction_date', 'amount', 'created_at', 'updated_at']
+    ordering_fields = ['transaction_date', 'amount', 'date_created', 'date_updated']
     search_fields = ['payment_reference', 'notes', 'invoice__invoice_number']
 
     def get_serializer_class(self):
@@ -73,7 +73,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
         payment.status = PaymentStatus.COMPLETED
         payment.confirmed_at = timezone.now()
-        payment.save(update_fields=['status', 'confirmed_at', 'updated_at'])
+        payment.save(update_fields=['status', 'confirmed_at', 'date_updated'])
 
         # Here add additional logic like sending notifications
         # or triggering other business logic

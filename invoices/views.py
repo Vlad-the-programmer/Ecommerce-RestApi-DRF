@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.utils.translation import gettext_lazy as _
-from django.db.models import Q, Sum, F, Case, When, Value, DecimalField, Count, Avg, DurationField
+from django.db.models import Sum, F, Case, When, Value, DecimalField, Count, Avg, DurationField
 from django.db.models.functions import TruncMonth
 from django.utils import timezone
 from rest_framework import viewsets, status, permissions
@@ -20,7 +20,7 @@ from .serializers import (
     InvoiceDetailSerializer
 )
 from .enums import InvoiceStatus
-from .utlis import send_email_confirmation
+from common.utlis import send_email_confirmation
 
 
 class InvoiceViewSet(viewsets.ModelViewSet):
@@ -39,7 +39,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         'is_paid': ['exact'],
         'is_overdue': ['exact'],
     }
-    ordering_fields = ['issue_date', 'due_date', 'total_amount', 'created_at']
+    ordering_fields = ['issue_date', 'due_date', 'total_amount', 'date_created']
     search_fields = ['invoice_number', 'user__email', 'user__first_name', 'user__last_name', 'notes']
 
     def get_serializer_class(self):

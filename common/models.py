@@ -309,6 +309,7 @@ class AddressBaseModel(CommonModel):
     state = models.CharField(max_length=50, null=True, blank=True, db_index=True,
                              help_text=_("State/Province/Region (e.g., Massachusetts, Ontario, Bavaria)"))
     country = CountryField(null=True, blank=True, db_index=True)
+    country_code = models.CharField(max_length=2, null=True, blank=True, db_index=True)
 
     def __str__(self):
         return f"{self.address_line_1}, {self.city}, {self.state}, {self.country}"
@@ -464,6 +465,12 @@ class AddressBaseModel(CommonModel):
         if self.zip_code:
             self.zip_code = self.zip_code.strip()
 
+    def save(self, *args, **kwargs):
+        """Save the address with country code."""
+        if self.country:
+            self.country_code = self.country.code
+        super().save(*args, **kwargs)
+
 
 class ItemCommonModel(CommonModel):
     """Item model base for models like CartItem, OrderItem etc. Represents a product"""
@@ -575,13 +582,11 @@ class ItemCommonModel(CommonModel):
         - Stock availability
         - Soft deletion of related objects
         """
-        # Check if the item itself is active and not deleted
         if not self.is_active or self.is_deleted:
             return False
 
         try:
             if self.variant_id:
-                # Check variant availability
                 if not hasattr(self, '_variant_cache'):
                     from products.models import ProductVariant
                     try:
@@ -602,7 +607,6 @@ class ItemCommonModel(CommonModel):
                 )
 
             elif self.product_id:
-                # Check product availability
                 if not hasattr(self, '_product_cache'):
                     from products.models import Product
                     try:

@@ -1,0 +1,73 @@
+{% extends '../../base.html' %}
+
+{% block title %}Your Order Has Shipped!{% endblock %}
+
+{% block content %}
+    <h2>Your Order Has Shipped! 🚚</h2>
+    
+    <p>Hello {{ customer_name }},</p>
+    
+    <p>Great news! Your order <strong>#{{ order_number }}</strong> has been shipped and is on its way to you. Here are the shipping details:</p>
+    
+    <div style="background-color: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+        <h3 style="margin-top: 0;">Shipping Information</h3>
+        <p><strong>Tracking Number:</strong> {{ tracking_number }}</p>
+        <p><strong>Shipping Method:</strong> {{ shipping_method }}</p>
+        <p><strong>Estimated Delivery:</strong> {{ estimated_delivery_date }}</p>
+        <p><strong>Carrier:</strong> {{ carrier_name }}</p>
+        
+        {% if tracking_url %}
+        <p style="margin-top: 15px;">
+            <a href="{{ tracking_url }}" class="button" style="text-decoration: none;">Track Your Package</a>
+        </p>
+        {% endif %}
+    </div>
+    
+    <h3>Shipping Address</h3>
+    <p>
+        {{ shipping_address.name }}<br>
+        {{ shipping_address.address_line_1 }}<nobr>
+        {% if shipping_address.address_line_2 %}
+            {{ shipping_address.address_line_2 }}<br>
+        {% endif %}
+        {{ shipping_address.city }}, {{ shipping_address.state }} {{ shipping_address.zip_code }}<br>
+        {{ shipping_address.country }}
+        {{ shipping_address.country_code }}
+    </p>
+    
+    <h3>Order Summary</h3>
+    <table>
+        <tr>
+            <th>Item</th>
+            <th>Quantity</th>
+            <th>Price</th>
+        </tr>
+        {% for item in order_items %}
+        <tr>
+            <td>{{ item.name }}</td>
+            <td>{{ item.quantity }}</td>
+            <td>${{ item.price }}</td>
+        </tr>
+        {% endfor %}
+        <tr>
+            <td colspan="2" style="text-align: right; font-weight: bold;">Subtotal:</td>
+            <td>${{ order_subtotal }}</td>
+        </tr>
+        <tr>
+            <td colspan="2" style="text-align: right; font-weight: bold;">Shipping:</td>
+            <td>${{ shipping_cost }}</td>
+        </tr>
+        <tr>
+            <td colspan="2" style="text-align: right; font-weight: bold;">Total:</td>
+            <td><strong>${{ order_total }}</strong></td>
+        </tr>
+    </table>
+    
+    <div style="margin-top: 30px; padding: 15px; background-color: #e8f5e9; border-radius: 5px;">
+        <h3 style="margin-top: 0;">Need Help?</h3>
+        <p>If you have any questions about your order or need assistance, please don't hesitate to contact our customer service team at <a href="mailto:{{ support_email }}" style="color: #2e7d32; text-decoration: underline;">{{ support_email }}</a> or call us at {{ support_phone }}.</p>
+    </div>
+    
+    <p>Thank you for shopping with us!</p>
+    <p>Best regards,<br>{{ site_name }} Team</p>
+{% endblock %}

@@ -1,7 +1,9 @@
 from decimal import Decimal
 from typing import Optional
 
+from django.conf import settings
 from django.db import models
+from django.db.models import Sum
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django_countries.fields import CountryField
@@ -89,6 +91,23 @@ class ShippingClass(CommonModel):
         help_text=_("Descriptive name for this shipping class (e.g., 'Standard Ground', 'Express 2-Day')")
     )
 
+    customer = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name=_("Customer"),
+        help_text=_("Customer who created this shipping class")
+    )
+
+    shipping_address = models.ForeignKey(
+        'common.ShippingAddress',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        verbose_name=_("Shipping Address"),
+        help_text=_("Shipping address for this shipping class")
+    )
     shipping_notes = models.TextField(
         blank=True,
         max_length=4000,
@@ -337,6 +356,12 @@ class ShippingClass(CommonModel):
             code=country_code,
         ).exists()
 
+    def get_order_total(self):
+        return self.orders.aggregate(total=Sum('total_amount'))['total']
+
+    def get_shipping_total_cost(self):
+        return self.calculate_shipping_cost(self.get_order_total(), self.shipping_address.country_code)
+
     def can_ship_item(self, weight_kg: float = 0, dimensions: str = None, destination_country_code: str = None) -> \
     tuple[bool, str]:
         """
@@ -517,5 +542,3 @@ class ShippingClass(CommonModel):
             raise ValidationError({
                 'max_weight_kg': _("Maximum weight must be greater than 0")
             })
-
-

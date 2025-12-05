@@ -23,13 +23,13 @@ class PaymentSerializer(serializers.ModelSerializer):
             'transaction_date',
             'confirmed_at',
             'notes',
-            'created_at',
-            'updated_at',
+            'date_created',
+            'date_updated',
         ]
         read_only_fields = [
             'id',
-            'created_at',
-            'updated_at',
+            'date_created',
+            'date_updated',
             'method_display',
             'status_display',
             'transaction_date',

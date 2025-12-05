@@ -35,8 +35,8 @@ class TestPaymentSerializer:
         assert 'method_display' in data
         assert 'status_display' in data
         assert 'transaction_date' in data
-        assert 'created_at' in data
-        assert 'updated_at' in data
+        assert 'date_created' in data
+        assert 'date_updated' in data
 
 
 class TestPaymentCreateSerializer:
