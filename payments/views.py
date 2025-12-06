@@ -1,6 +1,6 @@
 from django.db.models import Count, Sum
 from django.utils import timezone
-from rest_framework import viewsets, status, permissions
+from rest_framework import status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
@@ -16,7 +16,7 @@ from payments.serializers import (
 from payments.enums import PaymentStatus
 
 
-class PaymentViewSet(viewsets.ModelViewSet):
+class PaymentViewSet(SoftDeleteMixin, ModelViewSet):
     """
     API endpoint that allows payments to be viewed or edited.
     """

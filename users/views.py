@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 
 from rest_framework.generics import CreateAPIView
 
-from rest_framework import viewsets, parsers, serializers
+from rest_framework import parsers, serializers
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
-class UserViewSet(viewsets.ModelViewSet):
+class UserViewSet(SoftDeleteMixin, ModelViewSet):
     """
     User management viewset.
     Handles: list/search, retrieve/update/delete (excludes create).

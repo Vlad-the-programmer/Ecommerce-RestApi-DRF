@@ -5,12 +5,14 @@ from django.utils.translation import gettext_lazy as _
 from django.db.models import Sum, F, Case, When, Value, DecimalField, Count, Avg, DurationField
 from django.db.models.functions import TruncMonth
 from django.utils import timezone
-from rest_framework import viewsets, status, permissions
+from rest_framework import status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.viewsets import ModelViewSet
 
+from common.mixins import SoftDeleteMixin
 from common.permissions import IsAdminOrOwner
 from .models import Invoice
 from .serializers import (
@@ -23,7 +25,7 @@ from .enums import InvoiceStatus
 from common.utlis import send_email_confirmation
 
 
-class InvoiceViewSet(viewsets.ModelViewSet):
+class InvoiceViewSet(SoftDeleteMixin, ModelViewSet):
     """
     API endpoint that allows invoices to be viewed or edited.
     """
@@ -143,7 +145,6 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             for item in status_stats
         }
 
-        # Monthly trends
         monthly_stats = queryset.filter(
             issue_date__isnull=False
         ).annotate(
@@ -195,7 +196,6 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
         queryset = self.filter_queryset(self.get_queryset())
 
-        # Get current date and calculate dates for filtering
         today = timezone.now().date()
         start_of_month = today.replace(day=1)
         start_of_year = today.replace(month=1, day=1)

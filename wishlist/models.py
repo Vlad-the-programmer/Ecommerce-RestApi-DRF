@@ -178,10 +178,9 @@ class Wishlist(CommonModel):
         """Get items ordered by priority."""
         return self.wishlist_items.order_by("-priority")
 
-    def move_all_to_cart(self, cart):
+    def move_all_to_cart(self, cart, items=None):
         """Move all wishlist items to cart."""
-
-        return self.objects.move_items_to_cart(self.wishlist_items.all(), cart)
+        return self.objects.move_items_to_cart(items or self.wishlist_items.all(), cart)
 
 
 class WishListItem(ItemCommonModel):
@@ -244,12 +243,9 @@ class WishListItem(ItemCommonModel):
             ),
         ]
         indexes = ItemCommonModel.Meta.indexes + [
-            # Foreign key lookups
             models.Index(fields=["wishlist"], name="wl_item_wl_idx"),
             models.Index(fields=["product"], name="wl_item_product_idx"),
             models.Index(fields=["variant"], name="wl_item_variant_idx"),
-
-            # Composite indexes for common queries
             models.Index(fields=["wishlist", "is_deleted"], name="wl_item_status_idx"),
             models.Index(fields=["priority", "date_created"], name="wl_item_priority_date_idx"),
         ]

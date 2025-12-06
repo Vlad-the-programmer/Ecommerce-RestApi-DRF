@@ -1,9 +1,9 @@
-from rest_framework import status, permissions
-from rest_framework import serializers
+from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.viewsets import ModelViewSet
 
+from common.mixins import SoftDeleteMixin
 from common.permissions import IsAdminOrReadOnly
 from .models import Category
 from .serializers import (
@@ -15,7 +15,7 @@ from .serializers import (
 )
 
 
-class CategoryViewSet(ModelViewSet):
+class CategoryViewSet(SoftDeleteMixin, ModelViewSet):
     """
     API endpoint that allows categories to be viewed or edited.
     """
@@ -159,11 +159,3 @@ class CategoryViewSet(ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-    def perform_destroy(self, instance):
-        """
-        Soft delete the category instance.
-        """
-        can_delete, reason = instance.can_be_deleted()
-        if not can_delete:
-            raise serializers.ValidationError(reason)
-        instance.delete()

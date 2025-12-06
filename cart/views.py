@@ -1,8 +1,10 @@
-from rest_framework import viewsets, status, permissions
+from rest_framework import status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils import timezone
+from rest_framework.viewsets import ModelViewSet
 
+from common.mixins import SoftDeleteMixin
 from .enums import CART_STATUSES
 from .models import Cart, CartItem, Coupon, SavedCart, SavedCartItem
 from .serializers import (
@@ -13,18 +15,18 @@ from .serializers import (
 from common.permissions import IsOwnerOrReadOnly
 
 
-class CartViewSet(viewsets.ModelViewSet):
+class CartViewSet(SoftDeleteMixin, ModelViewSet):
     """
     ViewSet for managing shopping carts.
     """
-    queryset = Cart.objects.active().select_related('user', 'coupon').prefetch_related('cart_items')
+    queryset = Cart.objects.active()
     serializer_class = CartSerializer
     permission_classes = [permissions.IsAuthenticated, IsOwnerOrReadOnly]
     
     def get_queryset(self):
         """Return only the current user's carts."""
         if self.request.user.is_staff:
-            return self.queryset
+            return Cart.all_objects.select_related('user', 'coupon').prefetch_related('cart_items')
         return self.queryset.filter(user=self.request.user)
     
     def perform_create(self, serializer):
@@ -46,7 +48,6 @@ class CartViewSet(viewsets.ModelViewSet):
                 expiration_date__gt=timezone.now()
             )
             
-            # Validate coupon against cart
             if not coupon.is_valid(cart.total_price):
                 return Response(
                     {"error": "Coupon is not valid for this cart."},
@@ -74,10 +75,11 @@ class CartViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
             
-        # Here you would typically integrate with a payment processor
+        # TODO: Here you would typically integrate with a payment processor
         # and create an order. For now, we'll just mark the cart as paid.
+
         cart.status = CART_STATUSES.PAID
-        cart.save()
+        cart.save(update_fields=['status'])
         
         return Response(
             {"message": "Checkout successful. Order created."},
@@ -85,7 +87,7 @@ class CartViewSet(viewsets.ModelViewSet):
         )
 
 
-class CartItemViewSet(viewsets.ModelViewSet):
+class CartItemViewSet(SoftDeleteMixin, ModelViewSet):
     """
     ViewSet for managing cart items.
     """
@@ -106,13 +108,11 @@ class CartItemViewSet(viewsets.ModelViewSet):
             defaults={'user': self.request.user}
         )
 
-        # Check if item already exists in cart
         product = validated_data['product']
 
         return cart.cart_items.filter(
             product=product,
             cart=cart,
-            is_deleted=False
         ).first(), cart
 
     def perform_create(self, serializer):
@@ -122,11 +122,9 @@ class CartItemViewSet(viewsets.ModelViewSet):
         cart_item, cart = self._get_cart_item_and_cart(serializer.validated_data)
 
         if cart_item:
-            # Update quantity if item exists
             cart_item.quantity += quantity
-            cart_item.save()
+            cart_item.save(update_fields=['quantity'])
         else:
-            # Create new cart item
             serializer.save(cart=cart)
 
     def perform_destroy(self, instance):
@@ -137,18 +135,17 @@ class CartItemViewSet(viewsets.ModelViewSet):
         cart_item, cart = self._get_cart_item_and_cart(serializer.validated_data)
 
         if cart_item:
-            # Update quantity if item exists
             cart_item.quantity -= quantity
-            cart_item.save()
+            cart_item.save(update_fields=['quantity'])
         else:
-            instance.delete()
+            super().perform_destroy(instance)
 
 
-class CouponViewSet(viewsets.ModelViewSet):
+class CouponViewSet(SoftDeleteMixin, ModelViewSet):
     """
     ViewSet for managing coupons.
     """
-    queryset = Coupon.objects.filter(is_deleted=False, is_expired=False)
+    queryset = Coupon.objects.filter(is_expired=False)
     serializer_class = CouponSerializer
     permission_classes = [permissions.IsAdminUser, permissions.IsAuthenticated]
     
@@ -157,13 +154,12 @@ class CouponViewSet(viewsets.ModelViewSet):
         queryset = self.queryset.filter(expiration_date__gt=timezone.now())
         
         if not self.request.user.is_staff:
-            # Non-admin users can only see active, non-expired coupons
             return queryset
             
         return Coupon.all_objects.all()
 
 
-class SavedCartViewSet(viewsets.ModelViewSet):
+class SavedCartViewSet(SoftDeleteMixin, ModelViewSet):
     """
     ViewSet for managing saved carts.
     """
@@ -172,6 +168,8 @@ class SavedCartViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         """Return only the current user's saved carts."""
+        if self.request.user.is_staff:
+            return SavedCart.all_objects.all()
         return SavedCart.objects.filter(
             user=self.request.user,
         ).prefetch_related('items')
@@ -214,7 +212,7 @@ class SavedCartViewSet(viewsets.ModelViewSet):
         }, status=status.HTTP_200_OK)
 
 
-class SavedCartItemViewSet(viewsets.ModelViewSet):
+class SavedCartItemViewSet(SoftDeleteMixin, ModelViewSet):
     """
     ViewSet for managing saved cart items.
     """
@@ -223,6 +221,8 @@ class SavedCartItemViewSet(viewsets.ModelViewSet):
     
     def get_queryset(self):
         """Return only items in the current user's saved carts."""
+        if self.request.user.is_staff:
+            return SavedCartItem.all_objects.all()
         return SavedCartItem.objects.filter(
             saved_cart__user=self.request.user,
         ).select_related('product', 'saved_cart')

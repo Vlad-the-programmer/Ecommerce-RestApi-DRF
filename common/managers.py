@@ -1,9 +1,16 @@
 from django.db import models
+from common.middleware import get_current_user
 
 
 class SoftDeleteManager(models.Manager):
     """Default queryset excludes soft deleted objects."""
     def get_queryset(self):
+        """Get queryset with default filters"""
+        user = get_current_user()
+
+        if user and user.is_staff:
+            return super().get_queryset()
+
         return super().get_queryset().filter(is_deleted=False, is_active=True)
 
     def active(self):

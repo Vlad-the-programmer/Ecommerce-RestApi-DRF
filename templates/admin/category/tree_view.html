@@ -1,0 +1,149 @@
+{% extends "admin/change_list.html" %}
+{% load i18n admin_urls static admin_list %}
+
+{% block result_list %}
+    {% if action_form and actions_on_top and cl.show_admin_actions %}{% admin_actions %}{% endif %}
+
+    <div class="results">
+        <table id="result_list" class="table table-striped table-bordered table-hover table-condensed">
+            <thead>
+                <tr>
+                    <th scope="col" class="column-name">
+                        <div class="text"><span>{% trans 'Name' %}</span></div>
+                    </th>
+                    <th scope="col" class="column-slug">
+                        <div class="text"><span>{% trans 'Slug' %}</span></div>
+                    </th>
+                    <th scope="col" class="column-product_count">
+                        <div class="text"><span>{% trans 'Products' %}</span></div>
+                    </th>
+                    <th scope="col" class="column-subcategory_count">
+                        <div class="text"><span>{% trans 'Subcategories' %}</span></div>
+                    </th>
+                    <th scope="col" class="column-is_active">
+                        <div class="text"><span>{% trans 'Status' %}</span></div>
+                    </th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for category in categories %}
+                    {% include "admin/category/category/tree_node.html" with node=category level=0 %}
+                {% empty %}
+                    <tr class="row1">
+                        <td colspan="5" class="text-center">
+                            <p class="text-muted">{% trans 'No categories found.' %}</p>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if action_form and actions_on_bottom and cl.show_admin_actions %}{% admin_actions %}{% endif %}
+{% endblock %}
+
+{% block pagination %}{% endblock %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <style>
+        .category-node {
+            padding-left: 30px;
+            position: relative;
+        }
+        .toggle-children {
+            position: absolute;
+            left: 5px;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: pointer;
+            color: #999;
+            font-size: 12px;
+            width: 20px;
+            text-align: center;
+        }
+        .toggle-children:hover {
+            color: #333;
+        }
+        .children {
+            display: none;
+        }
+        .expanded > .children {
+            display: table-row-group;
+        }
+        .expanded > td:first-child > .toggle-children:before {
+            content: "−";
+        }
+        .collapsed > td:first-child > .toggle-children:before {
+            content: "+";
+        }
+        .status-active {
+            color: #28a745;
+        }
+        .status-inactive {
+            color: #dc3545;
+        }
+    </style>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Toggle category children
+            document.querySelectorAll('.toggle-children').forEach(function(toggle) {
+                toggle.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    const row = this.closest('tr');
+                    row.classList.toggle('expanded');
+                    row.classList.toggle('collapsed');
+
+                    // Toggle children
+                    const children = row.nextElementSibling;
+                    if (children && children.classList.contains('children')) {
+                        children.style.display = children.style.display === 'none' ? 'table-row-group' : 'none';
+                    }
+                });
+            });
+
+            // Expand all / Collapse all buttons
+            const toolbar = document.querySelector('div.breadcrumbs + .actions');
+            if (toolbar) {
+                const expandAll = document.createElement('a');
+                expandAll.href = '#';
+                expandAll.className = 'button';
+                expandAll.textContent = '{% trans "Expand All" %}';
+                expandAll.style.marginRight = '10px';
+                expandAll.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    document.querySelectorAll('.collapsed').forEach(function(row) {
+                        row.classList.remove('collapsed');
+                        row.classList.add('expanded');
+                        const children = row.nextElementSibling;
+                        if (children && children.classList.contains('children')) {
+                            children.style.display = 'table-row-group';
+                        }
+                    });
+                });
+
+                const collapseAll = document.createElement('a');
+                collapseAll.href = '#';
+                collapseAll.className = 'button';
+                collapseAll.textContent = '{% trans "Collapse All" %}';
+                collapseAll.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    document.querySelectorAll('.expanded').forEach(function(row) {
+                        if (row.querySelector('.toggle-children')) {
+                            row.classList.remove('expanded');
+                            row.classList.add('collapsed');
+                            const children = row.nextElementSibling;
+                            if (children && children.classList.contains('children')) {
+                                children.style.display = 'none';
+                            }
+                        }
+                    });
+                });
+
+                toolbar.insertBefore(collapseAll, toolbar.firstChild);
+                toolbar.insertBefore(expandAll, toolbar.firstChild);
+            }
+        });
+    </script>
+{% endblock %}

@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status, permissions
+from rest_framework import status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.utils.translation import gettext_lazy as _
@@ -13,7 +13,7 @@ from .serializers import (
 )
 
 
-class ReviewViewSet(viewsets.ModelViewSet):
+class ReviewViewSet(SoftDeleteMixin, ModelViewSet):
     """
     API endpoint that allows reviews to be viewed or edited.
     """

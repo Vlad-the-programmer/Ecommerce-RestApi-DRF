@@ -13,6 +13,7 @@ from refunds.managers import RefundManager, RefundItemManager
 
 import logging
 
+from refunds.notifier import RefundNotifier
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,12 @@ class Refund(CommonModel):
         default=Decimal('0.00'),
         help_text=_('Amount actually refunded to customer')
     )
-
+    currency = models.CharField(
+        _('Currency'),
+        max_length=3,
+        default='USD',
+        help_text=_('Currency of the refund amount')
+    )
     # Processing details
     requested_at = models.DateTimeField(
         _('Requested At'),
@@ -129,7 +135,12 @@ class Refund(CommonModel):
         verbose_name=_('Processed By'),
         help_text=_('Staff member who processed the refund')
     )
-
+    date_completed = models.DateTimeField(
+        _('Date Completed'),
+        null=True,
+        blank=True,
+        help_text=_('When the refund was completed')
+    )
     # Additional metadata
     customer_notes = models.TextField(
         _('Customer Notes'),
@@ -142,6 +153,12 @@ class Refund(CommonModel):
         blank=True,
         null=True,
         help_text=_('Internal notes for staff')
+    )
+    rejection_reason = models.TextField(
+        _('Rejection Reason'),
+        blank=True,
+        null=True,
+        help_text=_('Reason for rejecting the refund')
     )
     refund_receipt = models.FileField(
         _('Refund Receipt'),
@@ -158,7 +175,6 @@ class Refund(CommonModel):
         ordering = ['-requested_at']
 
         constraints = [
-            # Ensure valid amount relationships
             models.CheckConstraint(
                 check=models.Q(amount_approved__lte=models.F('amount_requested')),
                 name='approved_amount_lte_requested'
@@ -167,7 +183,6 @@ class Refund(CommonModel):
                 check=models.Q(amount_refunded__lte=models.F('amount_approved')),
                 name='refunded_amount_lte_approved'
             ),
-            # Prevent duplicate pending refunds for same order
             models.UniqueConstraint(
                 fields=['order', 'status'],
                 condition=models.Q(status__in=['pending', 'processing']),
@@ -175,7 +190,6 @@ class Refund(CommonModel):
             ),
         ]
         indexes = CommonModel.Meta.indexes + [ 
-            # Core query patterns
             models.Index(fields=['refund_number']),
             models.Index(fields=['status', 'is_deleted']),
             models.Index(fields=['order', 'status']),
@@ -185,18 +199,16 @@ class Refund(CommonModel):
             models.Index(fields=['status', 'is_deleted', 'requested_at']),
             models.Index(fields=['customer', 'is_deleted', 'requested_at']),
 
-            # Date-based queries
             models.Index(fields=['requested_at', 'status']),
             models.Index(fields=['processed_at', 'status']),
+            models.Index(fields=['date_completed', 'status']),
             models.Index(fields=['requested_at', 'customer']),
+            models.Index(fields=['processed_at', 'customer']),
+            models.Index(fields=['date_completed', 'customer']),
             models.Index(fields=['is_deleted', 'status', 'requested_at']),
             models.Index(fields=['refund_method', 'is_deleted', 'status']),
-
-            # Financial reporting
             models.Index(fields=['status', 'amount_requested']),
             models.Index(fields=['refund_method', 'status']),
-
-            # Combined status and business logic
             models.Index(fields=['is_active', 'is_deleted', 'status']),
             models.Index(fields=['reason', 'status', 'is_deleted']),
         ]
@@ -213,11 +225,9 @@ class Refund(CommonModel):
         """
         validation_errors = []
 
-        # Call parent's is_valid first
         if not super().is_valid():
             validation_errors.append("Base validation failed (inactive or deleted)")
 
-        # Check required fields
         if not self.refund_number:
             validation_errors.append("Refund number is required")
         if not self.order_id:
@@ -237,7 +247,6 @@ class Refund(CommonModel):
         if self.requested_at is None:
             validation_errors.append("Requested at date is required")
 
-        # Amount validations
         try:
             if self.amount_requested <= 0:
                 validation_errors.append("Amount requested must be greater than 0")
@@ -248,7 +257,6 @@ class Refund(CommonModel):
             if self.amount_refunded < 0:
                 validation_errors.append("Amount refunded cannot be negative")
 
-            # Amount relationship validations
             if self.amount_approved is not None and self.amount_approved > self.amount_requested:
                 validation_errors.append("Amount approved cannot be greater than amount requested")
 
@@ -258,7 +266,6 @@ class Refund(CommonModel):
         except (TypeError, DecimalException) as e:
             validation_errors.append(f"Error in amount validation: {str(e)}")
 
-        # Status-specific validations
         if self.status == RefundStatus.COMPLETED:
             if not self.processed_at:
                 validation_errors.append("Processed date is required for completed refunds")
@@ -267,26 +274,21 @@ class Refund(CommonModel):
             if self.amount_approved is None or self.amount_approved <= 0:
                 validation_errors.append("Valid approved amount is required for completed refunds")
 
-        # Date validations
         if self.processed_at and self.processed_at < self.requested_at:
             validation_errors.append("Processed date cannot be before requested date")
 
-        # Check if order exists and is not deleted
         if hasattr(self, 'order') and (not self.order or self.order.is_deleted):
             validation_errors.append("Order is deleted or does not exist")
 
-        # Check if payment exists and is not deleted
         if hasattr(self, 'payment'):
             if not self.payment:
                 validation_errors.append("Payment does not exist")
             elif self.payment.is_deleted or not hasattr(self.payment, 'is_successful') or not self.payment.is_successful:
                 validation_errors.append("Payment is invalid or not successful")
 
-        # Check if customer exists and is active
         if hasattr(self, 'customer') and (not self.customer or not self.customer.is_active):
             validation_errors.append("Customer is inactive or does not exist")
 
-        # Check refund items if they exist
         if hasattr(self, 'items'):
             try:
                 total_items_amount = sum(item.total_amount for item in self.items.all() if not item.is_deleted)
@@ -296,7 +298,6 @@ class Refund(CommonModel):
             except (TypeError, ValueError, DecimalException) as e:
                 validation_errors.append(f"Error calculating total items amount: {str(e)}")
 
-        # Log validation errors if any
         if validation_errors:
             logger.warning(
                 f"Refund validation failed for {self} - "
@@ -315,10 +316,6 @@ class Refund(CommonModel):
         if is_new and not self.refund_number:
             self.refund_number = self.generate_refund_number()
 
-        # Update processed_at when status changes to completed
-        if self.status == RefundStatus.COMPLETED and not self.processed_at:
-            self.processed_at = timezone.now()
-
         super().save(*args, **kwargs)
 
     def can_be_deleted(self) -> tuple[bool, str]:
@@ -330,29 +327,19 @@ class Refund(CommonModel):
                 - can_delete: True if the refund can be deleted, False otherwise
                 - reason: Explanation if deletion is not allowed
         """
-        # Check base class can_be_deleted first
         base_can_delete, reason = super().can_be_deleted()
         if not base_can_delete:
-            logger.warning(f"Refund {self.refund_number} cannot be deleted: {reason}")
             return False, reason
 
-        # Check if refund is already deleted
-        if self.is_deleted:
-            return False, "Refund is already deleted"
-
-        # Check if refund is completed
         if self.status == RefundStatus.COMPLETED:
             return False, "Completed refunds cannot be deleted"
 
-        # Check if any money has been refunded
         if self.amount_refunded > 0:
             return False, "Cannot delete refund with processed refunds"
 
-        # Check if refund is in a terminal state
         if self.status in [RefundStatus.CANCELLED, RefundStatus.REJECTED]:
             return True, ""
 
-        # For pending/approved refunds, check if they can be cancelled first
         if self.status in [RefundStatus.PENDING, RefundStatus.APPROVED]:
             return False, "Cannot delete refund in pending or approved state"
 
@@ -526,8 +513,8 @@ class Refund(CommonModel):
             self.amount_refunded = refunded_amount or self.amount_approved
             self.processed_at = timezone.now()
             self.processed_by = processed_by
+            self.date_completed = timezone.now()
 
-            # Process the payment refund
             try:
                 logger.info(f"Initiating payment refund - Refund: {self.refund_number}, Amount: {self.amount_refunded}")
                 self.payment.refund(self.amount_refunded, self.reason, self.refund_method)
@@ -565,7 +552,7 @@ class Refund(CommonModel):
             )
             raise ValidationError(_("An error occurred while completing the refund."))
 
-    def reject(self, processed_by=None, notes=None):
+    def reject(self, processed_by=None, notes=None, rejection_reason=None):
         """
         Reject the refund request with transaction and logging.
         
@@ -604,11 +591,16 @@ class Refund(CommonModel):
                 self.internal_notes = notes
                 update_fields.append("internal_notes")
 
+            if rejection_reason:
+                self.rejection_reason = rejection_reason
+                update_fields.append("rejection_reason")
+
             self.save(update_fields=update_fields)
 
             logger.info(
                 f"Successfully rejected refund - Refund: {self.refund_number}, "
                 f"Status: {old_status} -> {self.status}"
+                f"Rejection Reason: {self.rejection_reason}"
             )
 
         except ValidationError as ve:
@@ -624,23 +616,45 @@ class Refund(CommonModel):
             )
             raise ValidationError(_("An error occurred while rejecting the refund."))
 
-    def cancel(self):
+    def cancel(self, cancelled_by=None):
         """Cancel the refund request."""
         if self.status != RefundStatus.PENDING:
             raise ValidationError(_('Only pending refunds can be cancelled.'))
 
 
-        # Auto-cancel the refund if possible
         try:
             self._validate_status_transition(self.status, RefundStatus.CANCELLED)
 
             self.status = RefundStatus.CANCELLED
             self.is_active = False
+            self.processed_by = cancelled_by
+            self.processed_at = timezone.now()
             self.save(update_fields=["status", "is_active", "date_updated"])
             logger.info(f"Auto-cancelled refund {self.refund_number} before deletion")
         except Exception as e:
             logger.error(f"Failed to auto-cancel refund {self.refund_number}: {str(e)}")
 
+    def send_notification(self, notification_type=None, notifier=None):
+        """Send a notification for the refund."""
+        if notifier is None:
+            notifier = RefundNotifier(self)
+
+        if notification_type == RefundStatus.APPROVED:
+            notifier.send_approval_notification()
+        elif notification_type == RefundStatus.REJECTED:
+            notifier.send_rejection_notification()
+        elif notification_type == RefundStatus.CANCELLED:
+            notifier.send_cancellation_notification()
+        elif notification_type == RefundStatus.COMPLETED:
+            notifier.send_completion_notification()
+        else:
+            logger.error(f"Invalid notification type: {notification_type}"
+                         f"Types are: {RefundStatus.APPROVED, RefundStatus.REJECTED, 
+                         RefundStatus.CANCELLED, RefundStatus.COMPLETED}"
+                         )
+
+            raise ValueError(f"Invalid notification type: {notification_type}")
+        pass
 
 class RefundItem(CommonModel):
     """

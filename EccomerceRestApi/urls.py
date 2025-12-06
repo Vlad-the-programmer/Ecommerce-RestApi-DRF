@@ -20,6 +20,9 @@ from orders.urls import router as order_router
 from payments.urls import router as payment_router
 from reviews.urls import router as review_router
 from invoices.urls import router as invoice_router
+from refunds.urls import router as refund_router
+from wishlist.urls import router as wishlist_router
+from shipping.urls import router as shipping_router
 
 
 urlpatterns = [
@@ -64,6 +67,9 @@ v1_router.registry.extend(order_router.registry)
 v1_router.registry.extend(payment_router.registry)
 v1_router.registry.extend(review_router.registry)
 v1_router.registry.extend(invoice_router.registry)
+v1_router.registry.extend(refund_router.registry)
+v1_router.registry.extend(wishlist_router.registry)
+v1_router.registry.extend(shipping_router.registry)
 
 
 urlpatterns += [

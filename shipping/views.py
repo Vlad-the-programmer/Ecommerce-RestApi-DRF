@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status, filters
+from rest_framework import status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser
@@ -12,7 +12,7 @@ from .filters import ShippingClassFilter
 from .serializers import ShippingClassSerializer, InternationalRateSerializer
 
 
-class InternationalRateViewSet(viewsets.ModelViewSet):
+class InternationalRateViewSet(SoftDeleteMixin, ModelViewSet):
     """
     API endpoint for managing international shipping rates.
     """
@@ -51,7 +51,7 @@ class InternationalRateViewSet(viewsets.ModelViewSet):
         return Response(available_countries)
 
 
-class ShippingClassViewSet(viewsets.ModelViewSet):
+class ShippingClassViewSet(SoftDeleteMixin, ModelViewSet):
     """
     API endpoint for managing shipping classes.
     """

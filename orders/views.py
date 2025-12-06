@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status, permissions, filters
+from rest_framework import status, permissions, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
@@ -14,7 +14,7 @@ from orders.filters import OrderFilter, OrderItemFilter, OrderStatusHistoryFilte
 from common.permissions import IsOwnerOrStaff, IsStaffOrReadOnly
 
 
-class OrderViewSet(viewsets.ModelViewSet):
+class OrderViewSet(SoftDeleteMixin, ModelViewSet):
     """
     ViewSet for managing orders with advanced filtering and searching.
     
@@ -224,7 +224,7 @@ class OrderStatusHistoryViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.select_related('order', 'changed_by')
 
 
-class AdminOrderViewSet(viewsets.ModelViewSet):
+class AdminOrderViewSet(SoftDeleteMixin, ModelViewSet):
     """
     Admin-only ViewSet for managing all orders with advanced filtering and searching.
     

@@ -1,10 +1,9 @@
 from django.contrib import admin
 from django.utils.html import format_html
 from django.utils.translation import gettext_lazy as _
-from django.db.models import Count, Sum, F
 
 from .models import Product, ProductVariant, ProductImage, Location
-from .enums import ProductStatus, StockStatus, ProductLabel, ProductType
+from .enums import StockStatus
 
 
 class ProductImageInline(admin.TabularInline):
@@ -79,7 +78,6 @@ class ProductAdmin(admin.ModelAdmin):
     in_stock.boolean = True
     
     def save_model(self, request, obj, form, change):
-        # Handle product status based on stock status
         if obj.stock_quantity <= 0 and obj.stock_status != StockStatus.OUT_OF_STOCK:
             obj.stock_status = StockStatus.OUT_OF_STOCK
         elif obj.stock_quantity > 0 and obj.stock_status == StockStatus.OUT_OF_STOCK:

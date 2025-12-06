@@ -1,4 +1,4 @@
-from rest_framework import viewsets, status, filters
+from rest_framework import status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, IsAdminUser, AllowAny
@@ -13,7 +13,7 @@ from .serializers import (
 from .filters import ProductFilter
 
 
-class LocationViewSet(viewsets.ModelViewSet):
+class LocationViewSet(SoftDeleteMixin, ModelViewSet):
     """
     API endpoint for managing product locations.
     """
@@ -26,7 +26,7 @@ class LocationViewSet(viewsets.ModelViewSet):
     ordering = ['name']
 
 
-class ProductViewSet(viewsets.ModelViewSet):
+class ProductViewSet(SoftDeleteMixin, ModelViewSet):
     """
     API endpoint for managing products.
     """
@@ -123,7 +123,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
 
-class ProductVariantViewSet(viewsets.ModelViewSet):
+class ProductVariantViewSet(SoftDeleteMixin, ModelViewSet):
     """
     API endpoint for managing product variants.
     """
@@ -146,7 +146,7 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
         return queryset
 
 
-class ProductImageViewSet(viewsets.ModelViewSet):
+class ProductImageViewSet(SoftDeleteMixin, ModelViewSet):
     """
     API endpoint for managing product images.
     """
