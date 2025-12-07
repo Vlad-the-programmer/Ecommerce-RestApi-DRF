@@ -78,6 +78,10 @@ class ProductVariant(CommonModel):
     """
     objects = ProductVariantManager()
 
+    name = models.CharField(
+        max_length=100,
+        verbose_name=_("Variant Name")
+    )
     product = models.ForeignKey(
         "Product",
         on_delete=models.PROTECT,
@@ -90,7 +94,6 @@ class ProductVariant(CommonModel):
         unique=True,
         verbose_name=_("Variant SKU")
     )
-
     cost_price = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -142,12 +145,12 @@ class ProductVariant(CommonModel):
         db_table = "product_variants"
         verbose_name = _("Product Variant")
         verbose_name_plural = _("Product Variants")
-        ordering = ["product", "color", "size"]
+        ordering = ["product", "color", "size", "name"]
         unique_together = ['product', 'color', 'size', 'material', 'style']
         indexes = CommonModel.Meta.indexes + [
             models.Index(fields=['product', 'is_deleted', 'is_active']),
             models.Index(fields=['sku', 'is_deleted']),
-
+            models.Index(fields=['name', 'is_deleted']),
             models.Index(fields=['color', 'is_deleted']),
             models.Index(fields=['size', 'is_deleted']),
             models.Index(fields=['material', 'is_deleted']),

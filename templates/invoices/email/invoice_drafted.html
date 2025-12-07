@@ -1,0 +1,48 @@
+{% extends "../../base.html" %}
+
+{% block title %}Draft Invoice #{{ invoice.invoice_number }}{% endblock %}
+
+{% block content %}
+    <h2>Draft Invoice #{{ invoice.invoice_number }}</h2>
+    <p>Hello {{ user.first_name|default:'there' }},</p>
+    <p>This is a draft version of invoice #{{ invoice.invoice_number }} for your records. This is not a request for payment.</p>
+    
+    <div style="background-color: #e7f5ff; padding: 15px; border-radius: 4px; margin: 15px 0; border-left: 4px solid #339af0;">
+        <h3>Draft Invoice Summary</h3>
+        <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+                <td style="padding: 8px 0;"><strong>Invoice Number:</strong></td>
+                <td style="text-align: right;">#{{ invoice.invoice_number }} (Draft)</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0;"><strong>Date Created:</strong></td>
+                <td style="text-align: right;">{{ invoice.created_at|date:"F j, Y" }}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0;"><strong>Amount:</strong></td>
+                <td style="text-align: right;">{{ invoice.currency }} {{ invoice.total_amount|floatformat:2 }}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0;"><strong>Status:</strong></td>
+                <td style="text-align: right;"><span style="background-color: #e9ecef; padding: 2px 8px; border-radius: 4px;">Draft</span></td>
+            </tr>
+        </table>
+        
+        {% if invoice.notes %}
+        <div style="margin-top: 15px; padding: 10px; background-color: #f8f9fa; border-radius: 4px;">
+            <p><strong>Notes:</strong></p>
+            <p>{{ invoice.notes|linebreaksbr }}</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <p><strong>Please note:</strong> This is a draft invoice and does not require payment at this time. You will receive a separate notification when the final invoice is issued.</p>
+    
+    <p>If you have any questions about this draft invoice, please contact our support team.</p>
+    
+    <p>Best regards,<br>The {{ site_name }} Team</p>
+    
+    <div style="margin-top: 30px; padding-top: 15px; border-top: 1px solid #eee; font-size: 0.9em; color: #6c757d;">
+        <p>This is an automated message. Please do not reply to this email.</p>
+    </div>
+{% endblock %}

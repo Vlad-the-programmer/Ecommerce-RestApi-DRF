@@ -1,0 +1,52 @@
+{% extends "../../base.html" %}
+
+{% block title %}Invoice #{{ invoice.invoice_number }} - Overdue{% endblock %}
+
+{% block content %}
+    <h2>Invoice #{{ invoice.invoice_number }} is Overdue</h2>
+    <p>Hello {{ user.first_name|default:'there' }},</p>
+    <p>We noticed that payment for invoice #{{ invoice.invoice_number }} is now overdue. Please make the payment as soon as possible to avoid any late fees or service interruptions.</p>
+    
+    <div style="background-color: #fff3cd; padding: 15px; border-radius: 4px; margin: 15px 0; border-left: 4px solid #ffc107;">
+        <h3>Overdue Invoice</h3>
+        <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+                <td style="padding: 8px 0;"><strong>Invoice Number:</strong></td>
+                <td style="text-align: right;">#{{ invoice.invoice_number }}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0;"><strong>Due Date:</strong></td>
+                <td style="text-align: right;">{{ invoice.due_date|date:"F j, Y" }}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0;"><strong>Days Overdue:</strong></td>
+                <td style="text-align: right;">{{ invoice.days_overdue }} day{{ invoice.days_overdue|pluralize }}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0;"><strong>Amount Due:</strong></td>
+                <td style="text-align: right; font-weight: bold;">{{ invoice.currency }} {{ invoice.total_amount|floatformat:2 }}</td>
+            </tr>
+            {% if invoice.late_fee > 0 %}
+            <tr>
+                <td style="padding: 8px 0;"><strong>Late Fee:</strong></td>
+                <td style="text-align: right;">{{ invoice.currency }} {{ invoice.late_fee|floatformat:2 }}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0;"><strong>Total Amount Due:</strong></td>
+                <td style="text-align: right; font-weight: bold;">{{ invoice.currency }} {{ invoice.total_with_late_fee|floatformat:2 }}</td>
+            </tr>
+            {% endif %}
+        </table>
+    </div>
+
+    <p>Please make the payment immediately to avoid any service interruptions. You can pay your invoice by clicking the button below:</p>
+    
+    <p style="text-align: center; margin: 25px 0;">
+        <a href="{{ invoice_url }}" class="button" style="background-color: #dc3545;">Pay Now</a>
+    </p>
+
+    <p>If you've already made this payment, please ignore this notice. If you're having trouble making a payment or have any questions, please contact our support team.</p>
+    
+    <p>Thank you for your prompt attention to this matter.</p>
+    <p>Best regards,<br>The {{ site_name }} Team</p>
+{% endblock %}

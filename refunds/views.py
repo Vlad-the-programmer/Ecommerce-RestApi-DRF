@@ -5,6 +5,7 @@ from rest_framework.viewsets import ModelViewSet
 
 from common.mixins import SoftDeleteMixin
 from .models import Refund
+from .notifier import notify_by_email, RefundNotifier
 from .serializers import RefundSerializer, RefundCreateSerializer, RefundUpdateSerializer
 from .enums import RefundStatus
 from common.permissions import IsOwnerOrStaff
@@ -47,7 +48,7 @@ class RefundViewSet(SoftDeleteMixin, ModelViewSet):
             )
 
         refund.approve(processed_by=request.user)
-        refund.send_notification(notification_type=RefundStatus.APPROVED)
+        notify_by_email(notification_type=RefundStatus.APPROVED, notifier=RefundNotifier(refund))
 
         serializer = self.get_serializer(refund)
         return Response(serializer.data)
@@ -66,7 +67,7 @@ class RefundViewSet(SoftDeleteMixin, ModelViewSet):
 
         refund.reject(reason=reason, rejected_by=request.user)
 
-        refund.send_notification(notification_type=RefundStatus.REJECTED)
+        notify_by_email(notification_type=RefundStatus.REJECTED, notifier=RefundNotifier(refund))
 
         serializer = self.get_serializer(refund)
         return Response(serializer.data)
@@ -78,7 +79,7 @@ class RefundViewSet(SoftDeleteMixin, ModelViewSet):
 
         refund.cancel(cancelled_by=request.user)
 
-        refund.send_notification(notification_type=RefundStatus.CANCELLED)
+        notify_by_email(notification_type=RefundStatus.CANCELLED, notifier=RefundNotifier(refund))
 
         serializer = self.get_serializer(refund)
         return Response(serializer.data)
@@ -89,7 +90,7 @@ class RefundViewSet(SoftDeleteMixin, ModelViewSet):
         refund = self.get_object()
 
         refund.complete(completed_by=request.user)
-        refund.send_notification(notification_type=RefundStatus.COMPLETED)
+        notify_by_email(notification_type=RefundStatus.COMPLETED, notifier=RefundNotifier(refund))
 
         serializer = self.get_serializer(refund)
         return Response(serializer.data)

@@ -155,6 +155,15 @@ wheels = [
 ]
 
 [[package]]
+name = "django-admin-rangefilter"
+version = "0.13.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8a/bd/e05a9356f1ed15d1496ff901c33f9b9f354d154941d2366f961cd1530820/django_admin_rangefilter-0.13.3.tar.gz", hash = "sha256:8151b840753ea2c4de9963b1904cbbe7e786b7bc04de5dbd64567c86d287bbe8", size = 23588, upload-time = "2025-07-05T06:09:56.731Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6a/a5/fec346d1b793001c3a57947f643bfa174da667f0a8375ac59c8127243c8a/django_admin_rangefilter-0.13.3-py2.py3-none-any.whl", hash = "sha256:a776b1de5c5c153ed167e11fe757f138380207b2295a44d29d939c6ded76463a", size = 48396, upload-time = "2025-07-05T06:09:55.36Z" },
+]
+
+[[package]]
 name = "django-allauth"
 version = "65.12.0"
 source = { registry = "https://pypi.org/simple" }
@@ -275,6 +284,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "dj-rest-auth" },
     { name = "django" },
+    { name = "django-admin-rangefilter" },
     { name = "django-allauth" },
     { name = "django-countries" },
     { name = "django-extensions" },
@@ -300,6 +310,7 @@ dependencies = [
 requires-dist = [
     { name = "dj-rest-auth", specifier = ">=7.0.1" },
     { name = "django", specifier = ">=5.2.7" },
+    { name = "django-admin-rangefilter", specifier = ">=0.13.3" },
     { name = "django-allauth", specifier = ">=65.12.0" },
     { name = "django-countries", specifier = ">=7.6.1" },
     { name = "django-extensions", specifier = ">=4.1" },

@@ -3,7 +3,9 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils.translation import gettext_lazy as _
+from rest_framework.viewsets import ModelViewSet, ReadOnlyModelViewSet
 
+from common.mixins import SoftDeleteMixin
 from orders.models import Order, OrderItem, OrderTax, OrderStatusHistory
 from orders.serializers import (
     OrderSerializer, CreateOrderSerializer, OrderItemSerializer,
@@ -50,7 +52,8 @@ class OrderViewSet(SoftDeleteMixin, ModelViewSet):
         'status',
     ]
     ordering = ['-date_created']
-    
+    lookup_field = 'uuid'
+
     def get_serializer_class(self):
         if self.action == 'create':
             return CreateOrderSerializer
@@ -59,7 +62,6 @@ class OrderViewSet(SoftDeleteMixin, ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         
-        # For non-staff users, only show their own orders
         if not self.request.user.is_staff:
             queryset = queryset.filter(user=self.request.user)
             
@@ -144,7 +146,7 @@ class OrderViewSet(SoftDeleteMixin, ModelViewSet):
         return Response(serializer.data)
 
 
-class OrderItemViewSet(viewsets.ReadOnlyModelViewSet):
+class OrderItemViewSet(ReadOnlyModelViewSet):
     """
     ViewSet for viewing order items with filtering.
     
@@ -172,7 +174,7 @@ class OrderItemViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset.select_related('product', 'variant', 'order')
 
 
-class OrderTaxViewSet(viewsets.ReadOnlyModelViewSet):
+class OrderTaxViewSet(ReadOnlyModelViewSet):
     """
     ViewSet for viewing order taxes.
     """
@@ -197,7 +199,7 @@ class OrderTaxViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset
 
 
-class OrderStatusHistoryViewSet(viewsets.ReadOnlyModelViewSet):
+class OrderStatusHistoryViewSet(ReadOnlyModelViewSet):
     """
     ViewSet for viewing order status history with filtering.
     

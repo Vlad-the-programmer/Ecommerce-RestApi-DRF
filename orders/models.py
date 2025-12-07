@@ -315,7 +315,6 @@ class Order(CommonModel):
         verbose_name_plural = _("Orders")
         ordering = ["-date_created"]
         indexes = CommonModel.Meta.indexes + [
-            # Order number indexes
             models.Index(fields=['order_number']),
             models.Index(fields=['order_number', 'is_deleted']),
 
@@ -411,23 +410,20 @@ class Order(CommonModel):
 
     def clean(self):
         super().clean()
-        # Skip validation for new instances or if order doesn't exist yet
+
         if not self.pk:
             return
             
-        # Check if order has at least one non-deleted item
-        if not self.order_items.filter(is_deleted=False).exists():
+        if not self.order_items.exists():
             raise ValidationError({
                 'order_items': 'Order must have at least one item.'
             })
             
-        # Check if this is a digital order (all products are digital)
         is_digital_order = all(
             item.product.product_type == ProductType.DIGITAL 
-            for item in self.order_items.filter(is_deleted=False)
+            for item in self.order_items.all()
         )
         
-        # If it's not a digital order, shipping address is required
         if not is_digital_order and not self.shipping_address:
             raise ValidationError({
                 'shipping_address': 'Shipping address is required for non-digital orders.'
@@ -449,11 +445,9 @@ class Order(CommonModel):
         Returns:
             bool: True if the order is valid, False otherwise
         """
-        # Check parent class validation
         if not super().is_valid():
             return False
 
-        # Check required fields
         required_fields = {
             'order_number': self.order_number,
             'user': self.user,
@@ -467,19 +461,16 @@ class Order(CommonModel):
                 logger.warning(f"Order validation failed: Missing required field {field}")
                 return False
 
-        # Validate order number format
         if not (isinstance(self.order_number, str) and
                 len(self.order_number) > 0 and
                 self.order_number.startswith('ORD-')):
             logger.warning(f"Order validation failed: Invalid order number format: {self.order_number}")
             return False
 
-        # Validate total amount
         if self.total_amount < Decimal('0.00'):
             logger.warning(f"Order validation failed: Total amount cannot be negative: {self.total_amount}")
             return False
 
-        # Validate shipping requirements
         if not self.is_digital_order() and not self.shipping_address:
             logger.warning("Order validation failed: Shipping address is required for non-digital orders")
             return False
@@ -488,7 +479,6 @@ class Order(CommonModel):
             logger.warning("Order validation failed: Invalid shipping address")
             return False
 
-        # Validate order items
         if not hasattr(self, 'order_items') or not self.order_items.exists():
             logger.warning("Order validation failed: Order must have at least one item")
             return False
@@ -498,14 +488,12 @@ class Order(CommonModel):
                 logger.warning(f"Order validation failed: Invalid order item {item.id}")
                 return False
 
-        # Validate order taxes
         if hasattr(self, 'order_taxes'):
             for tax in self.order_taxes.all():
                 if not tax.is_valid():
                     logger.warning(f"Order validation failed: Invalid order tax {tax.id}")
                     return False
 
-        # Validate status transition if this is an update
         if self.pk:
             try:
                 old_status = Order.objects.get(pk=self.pk).status
@@ -594,12 +582,9 @@ class Order(CommonModel):
                     self.order_items.aggregate(total=Sum('total_price'))['total'] or Decimal('0.00')
             )
 
-            # Calculate shipping cost properly
             if self.shipping_class:
-                order_weight = self.shipping_class.calculate_order_weight(self)
                 shipping_total = self.shipping_class.calculate_shipping_cost(
                     order_total=order_items_total,
-                    weight_kg=order_weight,
                     destination_country_code=self.shipping_address.country.code if self.shipping_address else None
                 )
             else:

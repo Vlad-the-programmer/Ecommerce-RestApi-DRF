@@ -120,6 +120,10 @@ django==5.2.7 \
     #   djangorestframework-simplejwt
     #   drf-spectacular
     #   ecommercebachelorsproject
+django-admin-rangefilter==0.13.3 \
+    --hash=sha256:8151b840753ea2c4de9963b1904cbbe7e786b7bc04de5dbd64567c86d287bbe8 \
+    --hash=sha256:a776b1de5c5c153ed167e11fe757f138380207b2295a44d29d939c6ded76463a
+    # via ecommercebachelorsproject
 django-allauth==65.12.0 \
     --hash=sha256:a76ec55935354a1455753601a0a814a4ded368242e8969323480a2810b349183
     # via ecommercebachelorsproject

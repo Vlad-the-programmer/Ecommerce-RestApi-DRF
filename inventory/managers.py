@@ -141,6 +141,7 @@ class WarehouseManager(SoftDeleteManager):
             status__in=active_order_statuses
         ).distinct().order_by('-date_created')
 
+
 class InventoryManager(SoftDeleteManager):
     """
     Custom manager for Inventory with inventory-specific methods.

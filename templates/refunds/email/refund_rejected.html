@@ -1,0 +1,40 @@
+{% extends '../../base.html' %}
+
+{% block title %}Refund Rejected - Order #{{ order.order_number }}{% endblock %}
+
+{% block content %}
+    <h2>Refund Request Rejected</h2>
+    <p>Hello {{ user.first_name|default:user.username }},</p>
+    
+    <p>We regret to inform you that your refund request for Order #{{ order.order_number }} has been rejected.</p>
+    
+    <h3>Refund Details:</h3>
+    <table>
+        <tr>
+            <th>Order Number:</th>
+            <td>#{{ order.order_number }}</td>
+        </tr>
+        <tr>
+            <th>Refund Amount:</th>
+            <td>${{ refund.amount|floatformat:2 }}</td>
+        </tr>
+        <tr>
+            <th>Status:</th>
+            <td>Rejected</td>
+        </tr>
+        <tr>
+            <th>Reason for Rejection:</th>
+            <td>{{ rejection_reason }}</td>
+        </tr>
+    </table>
+
+    <p>If you believe this decision was made in error or have any questions, please contact our support team for further assistance.</p>
+    
+    <p>Thank you for your understanding.</p>
+    
+    <p>Sincerely,<br>The {{ site_name }} Team</p>
+    
+    <div style="margin-top: 30px; text-align: center;">
+        <a href="{{ refund_url }}" class="button">View Refund Details</a>
+    </div>
+{% endblock %}

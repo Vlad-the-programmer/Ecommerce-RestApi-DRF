@@ -298,6 +298,8 @@ class Invoice(CommonModel):
         """Check if the invoice is fully paid, considering partial payments."""
         if self.status == InvoiceStatus.PAID:
             return True
+
+        # TODO: Implement payment tracking system
         # If you implement a payment tracking system later:
         # return self.amount_paid >= self.total_amount
         return False

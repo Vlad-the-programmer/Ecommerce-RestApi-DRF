@@ -1,0 +1,42 @@
+{% extends '../../base.html' %}
+
+{% block title %}Refund Approved - Order #{{ order.order_number }}{% endblock %}
+
+{% block content %}
+    <h2>Your Refund Has Been Approved</h2>
+    <p>Hello {{ user.first_name|default:user.username }},</p>
+    
+    <p>We're pleased to inform you that your refund request for Order #{{ order.order_number }} has been approved.</p>
+    
+    <h3>Refund Details:</h3>
+    <table>
+        <tr>
+            <th>Order Number:</th>
+            <td>#{{ order.order_number }}</td>
+        </tr>
+        <tr>
+            <th>Refund Amount:</th>
+            <td>${{ refund.amount|floatformat:2 }}</td>
+        </tr>
+        <tr>
+            <th>Refund Method:</th>
+            <td>{{ refund.payment_method|default:"Original payment method" }}</td>
+        </tr>
+        <tr>
+            <th>Refund Status:</th>
+            <td>Approved</td>
+        </tr>
+    </table>
+
+    <p>Your refund will be processed within 5-7 business days and will be credited back to your original payment method.</p>
+    
+    <p>If you have any questions about your refund, please don't hesitate to contact our support team.</p>
+    
+    <p>Thank you for shopping with us!</p>
+    
+    <p>Sincerely,<br>The {{ site_name }} Team</p>
+    
+    <div style="margin-top: 30px; text-align: center;">
+        <a href="{{ refund_url }}" class="button">View Refund Status</a>
+    </div>
+{% endblock %}

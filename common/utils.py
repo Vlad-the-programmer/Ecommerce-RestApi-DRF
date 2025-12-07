@@ -9,7 +9,7 @@ from django.utils.html import strip_tags
 logger = logging.getLogger(__name__)
 
 
-def send_email_confirmation(
+def send_email_notification(
         subject,
         template_name,
         context,

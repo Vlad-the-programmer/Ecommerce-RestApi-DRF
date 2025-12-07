@@ -26,25 +26,16 @@ from shipping.urls import router as shipping_router
 
 
 urlpatterns = [
-    # Admin
     path('admin/', admin.site.urls),
 
-    # API Endpoints
-    path('api/profile/', include('users.urls')),
-    
-    # Allauth URLs (for email verification)
     path('accounts/', include('allauth.urls')),
 
-    # Auth
     path('api/auth/', include('userAuth.urls')),
 
-    # API Schema - JSON
     path('api/schema/', SpectacularAPIView.as_view(api_version='v1'), name='schema'),
 
-    # Swagger UI
     path('api/schema/swagger-ui/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
 
-    # ReDoc UI
     path('api/schema/redoc/',
          SpectacularRedocView.as_view(
              url_name='schema',
@@ -53,7 +44,6 @@ urlpatterns = [
          name='redoc'
          ),
 
-    # Add a redirect from / to /api/schema/swagger-ui/
     path('', RedirectView.as_view(url='/api/schema/swagger-ui/', permanent=False)),
 ]
 
@@ -72,21 +62,24 @@ v1_router.registry.extend(wishlist_router.registry)
 v1_router.registry.extend(shipping_router.registry)
 
 
+v1_urls = [
+    path('api/v1/admin/store-management/', include('inventory.urls')),
+    path('api/v1/profile/', include('users.urls')),
+] + v1_router.urls
+
+
 urlpatterns += [
-    path('api/v1/', include((v1_router.urls, 'v1'), namespace='v1')),
+    path('api/v1/', include((v1_urls, 'v1'), namespace='v1')),
 ]
 
 
 if settings.DEBUG:
     from django.contrib.staticfiles.urls import staticfiles_urlpatterns
 
-    # Serve static files
     urlpatterns += staticfiles_urlpatterns()
 
-    # Serve media files
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
 
-    # Debug toolbar
     try:
         import debug_toolbar
 

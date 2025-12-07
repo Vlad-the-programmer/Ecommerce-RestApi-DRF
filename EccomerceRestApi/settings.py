@@ -32,10 +32,8 @@ INSTALLED_APPS = [
     'allauth.account',
     'allauth.socialaccount',
 
-    # User authentication and profiles
     'users.apps.UsersConfig',
 
-    # Third-party apps
     'dj_rest_auth',
     'dj_rest_auth.registration',
     'rest_framework',
@@ -45,9 +43,10 @@ INSTALLED_APPS = [
     'django_filters',
     'django_countries',
     'drf_spectacular',
+    'rangefilter',
 
     # Local apps
-    'common.apps.CommonConfig', # Common utils
+    'common.apps.CommonConfig',
     'cart.apps.CartConfig',
     'category.apps.CategoryConfig',
     'products.apps.ProductsConfig',

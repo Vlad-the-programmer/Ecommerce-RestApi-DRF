@@ -13,6 +13,8 @@ class OrderStatuses(TextChoices):
     CANCELLED = "cancelled", _("Cancelled")
     REFUNDED = "refunded", _("Refunded")
     COMPLETED = "completed", _("Completed")
+    UPDATED = "updated", _("Updated")
+    RETURNED = "returned", _("Returned")
 
 
 # Define statuses that prevent deletion

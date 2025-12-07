@@ -64,7 +64,7 @@ class ProductVariantSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductVariant
         fields = [
-            'id', 'sku', 'color', 'size', 'material', 'style',
+            'id', 'sku', 'name', 'color', 'size', 'material', 'style',
             'cost_price', 'price_adjustment', 'stock_quantity',
             'low_stock_threshold', 'in_stock', 'is_low_stock',
             'final_price', 'date_created', 'date_updated'
@@ -87,13 +87,13 @@ class ProductListSerializer(serializers.ModelSerializer):
     price_range = serializers.SerializerMethodField()
     in_stock = serializers.BooleanField(read_only=True)
     is_on_sale = serializers.BooleanField(read_only=True)
-    
+
     class Meta:
         model = Product
         fields = [
             'id', 'product_name', 'slug', 'category', 'primary_image',
             'price', 'compare_at_price', 'price_range', 'in_stock',
-            'is_on_sale', 'status', 'stock_status', 'label', 'date_created'
+            'is_on_sale', 'status', 'stock_status', 'label', 'date_created',
         ]
         read_only_fields = ['date_created']
     

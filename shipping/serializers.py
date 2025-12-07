@@ -2,7 +2,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 from common.models import ItemCommonModel
-from common.utlis import send_email_confirmation
+from common.utils import send_email_notification
 from .models import InternationalRate, ShippingClass
 from .enums import ShippingType
 
@@ -164,7 +164,7 @@ class ShippingClassSerializer(serializers.ModelSerializer):
             'site_url': getattr(settings, 'SITE_URL', 'https://your-ecommerce-site.com'),
         }
 
-        send_email_confirmation(
+        send_email_notification(
             subject=f"Your Shipping Confirmation - Order #{context['order_number']}",
             template_name='shipping/emails/shipping_sent_confirm',
             context=context,

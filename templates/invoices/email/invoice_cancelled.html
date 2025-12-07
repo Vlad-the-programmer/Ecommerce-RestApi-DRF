@@ -1,0 +1,43 @@
+{% extends "../../base.html" %}
+
+{% block title %}Invoice #{{ invoice.invoice_number }} - Cancelled{% endblock %}
+
+{% block content %}
+    <h2>Invoice #{{ invoice.invoice_number }} Has Been Cancelled</h2>
+    <p>Hello {{ user.first_name|default:'there' }},</p>
+    <p>This is to inform you that invoice #{{ invoice.invoice_number }} has been cancelled.</p>
+    
+    <div style="background-color: #f8f9fa; padding: 15px; border-radius: 4px; margin: 15px 0; border-left: 4px solid #6c757d;">
+        <h3>Invoice Details</h3>
+        <table style="width: 100%; border-collapse: collapse;">
+            <tr>
+                <td style="padding: 8px 0;"><strong>Invoice Number:</strong></td>
+                <td style="text-align: right;">#{{ invoice.invoice_number }}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0;"><strong>Issue Date:</strong></td>
+                <td style="text-align: right;">{{ invoice.issue_date|date:"F j, Y" }}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0;"><strong>Original Amount:</strong></td>
+                <td style="text-align: right;">{{ invoice.currency }} {{ invoice.total_amount|floatformat:2 }}</td>
+            </tr>
+            <tr>
+                <td style="padding: 8px 0;"><strong>Status:</strong></td>
+                <td style="text-align: right; font-weight: bold; color: #dc3545;">Cancelled</td>
+            </tr>
+        </table>
+        
+        {% if invoice.cancellation_reason %}
+        <div style="margin-top: 15px; padding: 10px; background-color: #fff; border-radius: 4px;">
+            <p><strong>Cancellation Reason:</strong></p>
+            <p>{{ invoice.cancellation_reason }}</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <p>If you believe this cancellation was made in error or have any questions, please contact our support team immediately.</p>
+    
+    <p>Thank you for your understanding.</p>
+    <p>Best regards,<br>The {{ site_name }} Team</p>
+{% endblock %}

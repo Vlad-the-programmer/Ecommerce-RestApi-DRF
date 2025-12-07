@@ -1,0 +1,57 @@
+{% extends '../../base.html' %}
+
+{% block title %}Your Order #{{ order.order_number }} Has Shipped!{% endblock %}
+
+{% block content %}
+    <h2>Your Order is on the Way! 🚚</h2>
+    <p>Hello {{ user.first_name|default:'there' }},</p>
+    <p>Great news! Your order #{{ order.order_number }} has been shipped and is on its way to you.</p>
+    
+    <div style="background-color: #e3f2fd; padding: 15px; border-radius: 4px; margin: 15px 0;">
+        <h3>Shipping Information</h3>
+        <table>
+            <tr>
+                <th>Tracking Number:</th>
+                <td>{{ order.tracking_number|default:'Not available' }}</td>
+            </tr>
+            <tr>
+                <th>Shipping Carrier:</th>
+                <td>{{ order.shipping_carrier|default:'Standard Shipping' }}</td>
+            </tr>
+            <tr>
+                <th>Estimated Delivery:</th>
+                <td>{{ order.estimated_delivery|date:"l, F j, Y"|default:'3-5 business days' }}</td>
+            </tr>
+        </table>
+        
+        {% if order.tracking_url %}
+        <p style="text-align: center; margin: 15px 0 0;">
+            <a href="{{ order.tracking_url }}" class="button" target="_blank">Track Your Package</a>
+        </p>
+        {% endif %}
+    </div>
+    
+    <p>Your order includes the following items:</p>
+    <table>
+        <thead>
+            <tr>
+                <th>Item</th>
+                <th>Quantity</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in order.items.all %}
+            <tr>
+                <td>{{ item.product_variant.name }}</td>
+                <td>{{ item.quantity }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    <p>If you have any questions about your shipment, please contact our support team.</p>
+    
+    <p>Thank you for shopping with us!</p>
+    
+    <p>Best regards,<br>The {{ site_name }} Team</p>
+{% endblock %}

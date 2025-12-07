@@ -1,0 +1,33 @@
+{% extends '../../base.html' %}
+
+{% block title %}Order #{{ order.order_number }} - Order Updated{% endblock %}
+
+{% block content %}
+    <h2>Your Order Has Been Updated</h2>
+    <p>Hello {{ user.first_name|default:'there' }},</p>
+    <p>Your order #{{ order.order_number }} has been updated. Here are the current details:</p>
+    
+    <table>
+        <tr>
+            <th>Order Number:</th>
+            <td>#{{ order.order_number }}</td>
+        </tr>
+        <tr>
+            <th>Status:</th>
+            <td>{{ order.get_status_display }}</td>
+        </tr>
+        <tr>
+            <th>Order Total:</th>
+            <td>${{ order.total_amount }}</td>
+        </tr>
+    </table>
+    
+    <p>You can view the updated order details by clicking the button below:</p>
+    <p style="text-align: center;">
+        <a href="{{ order_url }}" class="button">View Updated Order</a>
+    </p>
+    
+    <p>If you did not request these changes or have any questions, please contact our support team immediately.</p>
+    
+    <p>Best regards,<br>The {{ site_name }} Team</p>
+{% endblock %}

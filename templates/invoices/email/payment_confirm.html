@@ -1,5 +1,7 @@
 {% extends "../../base.html" %}
 
+{% block title %} Payment Confirmation {% endblock %}
+
 {% block content %}
     <h2>Payment Confirmation</h2>
     <p>Hello {{ recipient_name }},</p>
@@ -14,13 +16,13 @@
         <tr>
             <td style="padding: 8px; border-bottom: 1px solid #ddd;">{{ payment_description }}</td>
             <td style="text-align: right; padding: 8px; border-bottom: 1px solid #ddd;">
-                {{ amount|floatformat:2 }} {{ currency }}
+                {{ invoice.amount|floatformat:2 }} {{ invoice.currency }}
             </td>
         </tr>
         <tr>
             <td style="padding: 8px; border-bottom: 1px solid #ddd; font-weight: bold;">Total</td>
             <td style="text-align: right; padding: 8px; border-bottom: 1px solid #ddd; font-weight: bold;">
-                {{ amount|floatformat:2 }} {{ currency }}
+                {{ invoice.amount|floatformat:2 }} {{ invoice.currency }}
             </td>
         </tr>
     </table>

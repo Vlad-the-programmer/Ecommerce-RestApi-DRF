@@ -1,0 +1,40 @@
+{% extends '../../base.html' %}
+
+{% block title %}Payment Required for Order #{{ order.order_number }}{% endblock %}
+
+{% block content %}
+    <h2>Payment Required</h2>
+    <p>Hello {{ user.first_name|default:'there' }},</p>
+    <p>We noticed that your payment for order #{{ order.order_number }} is still pending. Please complete your payment to avoid order cancellation.</p>
+    
+    <table>
+        <tr>
+            <th>Order Number:</th>
+            <td>#{{ order.order_number }}</td>
+        </tr>
+        <tr>
+            <th>Order Date:</th>
+            <td>{{ order.date_created|date:"F j, Y" }}</td>
+        </tr>
+        <tr>
+            <th>Amount Due:</th>
+            <td>${{ order.total_amount }}</td>
+        </tr>
+        <tr>
+            <th>Payment Due By:</th>
+            <td>{{ order.payment_due_date|date:"F j, Y"|default:"ASAP" }}</td>
+        </tr>
+    </table>
+    
+    <div style="background-color: #fff3cd; padding: 15px; border-radius: 4px; margin: 15px 0;">
+        <p><strong>Important:</strong> Your order will be automatically cancelled if payment is not received by {{ order.payment_due_date|date:"F j, Y"|default:"the specified due date" }}.</p>
+    </div>
+    
+    <p style="text-align: center; margin: 25px 0;">
+        <a href="{{ order_url }}" class="button" style="background-color: #dc3545;">Complete Payment Now</a>
+    </p>
+    
+    <p>If you've already made the payment, please disregard this email. If you need any assistance, please contact our support team.</p>
+    
+    <p>Best regards,<br>The {{ site_name }} Team</p>
+{% endblock %}

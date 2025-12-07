@@ -1,0 +1,37 @@
+{% extends '../../base.html' %}
+
+{% block title %}Order #{{ order.order_number }} - Cancelled{% endblock %}
+
+{% block content %}
+    <h2>Your Order Has Been Cancelled</h2>
+    <p>Hello {{ user.first_name|default:'there' }},</p>
+    <p>We're sorry to inform you that your order #{{ order.order_number }} has been cancelled.</p>
+    
+    <table>
+        <tr>
+            <th>Order Number:</th>
+            <td>#{{ order.order_number }}</td>
+        </tr>
+        <tr>
+            <th>Order Date:</th>
+            <td>{{ order.date_created|date:"F j, Y" }}</td>
+        </tr>
+        <tr>
+            <th>Order Total:</th>
+            <td>${{ order.total_amount }}</td>
+        </tr>
+    </table>
+    
+    {% if order.cancellation_reason %}
+    <div style="background-color: #fff3cd; padding: 15px; border-radius: 4px; margin: 15px 0;">
+        <h4>Cancellation Reason:</h4>
+        <p>{{ order.cancellation_reason }}</p>
+    </div>
+    {% endif %}
+    
+    <p>If you have any questions about this cancellation, please contact our support team.</p>
+    
+    <p>We hope to see you again soon!</p>
+    
+    <p>Best regards,<br>The {{ site_name }} Team</p>
+{% endblock %}

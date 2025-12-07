@@ -15,6 +15,7 @@ from rest_framework.viewsets import ModelViewSet
 from common.mixins import SoftDeleteMixin
 from common.permissions import IsAdminOrOwner
 from .models import Invoice
+from .notifier import notify_by_email, InvoiceNotifier
 from .serializers import (
     InvoiceCreateSerializer,
     InvoiceUpdateSerializer,
@@ -22,7 +23,7 @@ from .serializers import (
     InvoiceDetailSerializer
 )
 from .enums import InvoiceStatus
-from common.utlis import send_email_confirmation
+from common.utils import send_email_notification
 
 
 class InvoiceViewSet(SoftDeleteMixin, ModelViewSet):
@@ -93,7 +94,7 @@ class InvoiceViewSet(SoftDeleteMixin, ModelViewSet):
             )
 
         invoice.mark_paid()
-
+        notify_by_email(InvoiceStatus.PAID, InvoiceNotifier(invoice))
         return Response({'status': 'Invoice marked as paid'})
 
     @action(detail=True, methods=['post'])
@@ -102,9 +103,8 @@ class InvoiceViewSet(SoftDeleteMixin, ModelViewSet):
         invoice = self.get_object()
 
         if invoice.status == InvoiceStatus.DRAFT:
-            invoice.status = InvoiceStatus.ISSUED
-            invoice.sent_at = timezone.now()
-            invoice.save()
+            invoice.mark_issued()
+            notify_by_email(InvoiceStatus.ISSUED, InvoiceNotifier(invoice))
 
             # TODO: Send email to customer
             # send_invoice_email.delay(invoice.id)
@@ -115,6 +115,51 @@ class InvoiceViewSet(SoftDeleteMixin, ModelViewSet):
             {'detail': _('Only draft invoices can be sent.')},
             status=status.HTTP_400_BAD_REQUEST
         )
+
+    @action(detail=True, methods=['post'])
+    def mark_as_overdue(self, request, pk=None):
+        """Mark an invoice as overdue."""
+        invoice = self.get_object()
+
+        if invoice.status == InvoiceStatus.OVERDUE:
+            return Response(
+                {'detail': _('Invoice is already marked as overdue.')},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        invoice.mark_overdue()
+        notify_by_email(InvoiceStatus.OVERDUE, InvoiceNotifier(invoice))
+        return Response({'status': 'Invoice marked as overdue'})
+
+    @action(detail=True, methods=['post'])
+    def mark_as_cancelled(self, request, pk=None):
+        """Mark an invoice as cancelled."""
+        invoice = self.get_object()
+
+        if invoice.status == InvoiceStatus.CANCELLED:
+            return Response(
+                {'detail': _('Invoice is already marked as cancelled.')},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        invoice.mark_cancelled()
+        notify_by_email(InvoiceStatus.CANCELLED, InvoiceNotifier(invoice))
+        return Response({'status': 'Invoice marked as cancelled'})
+
+    @action(detail=True, methods=['post'])
+    def mark_as_draft(self, request, pk=None):
+        """Mark an invoice as draft."""
+        invoice = self.get_object()
+
+        if invoice.status == InvoiceStatus.DRAFT:
+            return Response(
+                {'detail': _('Invoice is already marked as draft.')},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        invoice.mark_draft()
+        notify_by_email(InvoiceStatus.DRAFT, InvoiceNotifier(invoice))
+        return Response({'status': 'Invoice marked as draft'})
 
     @action(detail=False, methods=['get'])
     def stats(self, request):
@@ -305,22 +350,7 @@ class InvoiceViewSet(SoftDeleteMixin, ModelViewSet):
         # TODO: Send payment confirmation email
         # send_payment_confirmation.delay(payment.id)
 
-        send_email_confirmation(
-            subject='Payment Confirmation',
-            template_name='invoices/email/payment_confirm',
-            context={
-                'recipient_name': f"{invoice.user.first_name} {invoice.user.last_name}",
-                'payment_description': f"Payment for Invoice #{invoice.invoice_number}",
-                'amount': amount,
-                'currency': invoice.currency,
-                'payment_method': payment.payment_method,
-                'transaction_id': payment.payment_reference,
-                'date': timezone.now(),
-                'site_name': getattr(settings, 'SITE_NAME', 'Your E-commerce Site'),
-                'site_url': getattr(settings, 'SITE_URL', 'https://your-ecommerce-site.com'),
-                },
-            to_emails=[invoice.customer.email]
-        )
+        notify_by_email(InvoiceStatus.PAID, InvoiceNotifier(invoice))
 
         return Response({
             'status': 'Payment added successfully',

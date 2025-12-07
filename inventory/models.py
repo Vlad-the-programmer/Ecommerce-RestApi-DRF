@@ -1,15 +1,20 @@
 import datetime
+import logging
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import F
 from django.utils.translation import gettext_lazy as _
 from django.utils import timezone
+from django.conf import settings
 
 from common.models import CommonModel, AddressBaseModel
 from inventory.enums import WAREHOUSE_TYPE
 from inventory.managers import InventoryManager, WarehouseManager
 from shipping.models import ShippingClass
+
+logger = logging.getLogger(__name__)
 
 
 class WarehouseProfile(AddressBaseModel):
@@ -22,7 +27,6 @@ class WarehouseProfile(AddressBaseModel):
     is_operational = models.BooleanField(default=True, db_index=True, help_text=_("Is warehouse operational"))
     capacity = models.PositiveIntegerField(help_text=_("Total storage capacity in units"))
 
-    # Additional useful fields for warehouse management
     warehouse_type = models.CharField(
         max_length=20,
         choices=WAREHOUSE_TYPE.choices,
@@ -42,7 +46,6 @@ class WarehouseProfile(AddressBaseModel):
         related_name='managed_warehouses'
     )
 
-    # Add capacity management
     current_utilization = models.DecimalField(
         max_digits=5, decimal_places=2,
         default=0.0,
@@ -50,7 +53,6 @@ class WarehouseProfile(AddressBaseModel):
         help_text=_("Current capacity utilization percentage")
     )
 
-    # Add service metrics
     sla_days = models.PositiveIntegerField(
         default=2,
         db_index=True,
@@ -62,11 +64,9 @@ class WarehouseProfile(AddressBaseModel):
         help_text=_("Whether express processing is available")
     )
 
-    # Add financial details
     tax_id = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     currency = models.CharField(max_length=3, default='USD', db_index=True)
 
-    # Additional operational fields
     is_active_fulfillment = models.BooleanField(
         default=True,
         db_index=True,
@@ -191,15 +191,9 @@ class WarehouseProfile(AddressBaseModel):
         Returns:
             bool: True if warehouse is valid for operations, False otherwise with detailed logging
         """
-        import logging
-        logger = logging.getLogger(__name__)
-
-        # Basic model validation
         if not super().is_valid():
-            logger.warning(f"Warehouse {self.id} failed basic model validation")
             return False
 
-        # Check required fields
         required_fields = {
             'name': bool(self.name and self.name.strip()),
             'code': bool(self.code and self.code.strip()),
@@ -213,17 +207,14 @@ class WarehouseProfile(AddressBaseModel):
             logger.warning(f"Warehouse {self.id} is missing required fields: {', '.join(missing_fields)}")
             return False
 
-        # Check at least one contact method is provided
         if not (self.contact_phone or self.contact_email):
             logger.warning(f"Warehouse {self.id} must have at least one contact method (phone or email)")
             return False
 
-        # Check capacity is positive
         if not isinstance(self.capacity, (int, float, Decimal)) or self.capacity <= 0:
             logger.warning(f"Warehouse {self.id} has invalid capacity: {self.capacity}")
             return False
 
-        # Check utilization is valid
         if not (0 <= self.current_utilization <= 100):
             logger.warning(
                 f"Warehouse {self.id} has invalid utilization: {self.current_utilization}% "
@@ -231,17 +222,14 @@ class WarehouseProfile(AddressBaseModel):
             )
             return False
 
-        # Check SLA days is positive
         if not isinstance(self.sla_days, int) or self.sla_days <= 0:
             logger.warning(f"Warehouse {self.id} has invalid SLA days: {self.sla_days}")
             return False
 
-        # Check max_order_per_day is positive
         if not isinstance(self.max_order_per_day, int) or self.max_order_per_day <= 0:
             logger.warning(f"Warehouse {self.id} has invalid max orders per day: {self.max_order_per_day}")
             return False
 
-        # Check timezone is valid
         try:
             import pytz
             pytz.timezone(self.timezone)
@@ -249,7 +237,6 @@ class WarehouseProfile(AddressBaseModel):
             logger.warning(f"Warehouse {self.id} has invalid timezone: {self.timezone}")
             return False
 
-        # Check operational status constraints
         if not self.is_operational and self.is_active_fulfillment:
             logger.warning(
                 f"Warehouse {self.id} cannot be set for fulfillment when not operational"
@@ -262,7 +249,6 @@ class WarehouseProfile(AddressBaseModel):
             )
             return False
 
-        # Check main warehouse constraints
         if self.warehouse_type == WAREHOUSE_TYPE.MAIN and not self.is_operational:
             logger.warning(
                 f"Warehouse {self.id} is a main warehouse and must be operational"
@@ -279,22 +265,15 @@ class WarehouseProfile(AddressBaseModel):
         Returns:
             tuple: (can_delete: bool, reason: str)
         """
-        import logging
-        logger = logging.getLogger(__name__)
-
-        # Check parent class constraints
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
-            logger.warning(f"Warehouse {self.id} cannot be deleted: {reason}")
             return can_delete, reason
 
-        # Check if warehouse is operational
         if self.is_operational:
             message = "Cannot delete an operational warehouse"
             logger.warning(f"{message} (Warehouse ID: {self.id})")
             return False, message
 
-        # Check for active inventory
         if hasattr(self, 'inventory_items') and self.inventory_items.filter(
                 quantity_available__gt=0
         ).exists():
@@ -304,7 +283,6 @@ class WarehouseProfile(AddressBaseModel):
             return False, message
 
         from orders.enums import active_order_statuses
-        # Check for pending orders
         if hasattr(self, 'orders') and self.orders.filter(
                 status__in=active_order_statuses
         ).exists():
@@ -315,7 +293,6 @@ class WarehouseProfile(AddressBaseModel):
             logger.warning(f"{message} (Warehouse ID: {self.id})")
             return False, message
 
-        # Check for active transfers
         if self.has_active_orders:
             message = f"Cannot delete warehouse with active orders"
             logger.warning(f"{message} (Warehouse ID: {self.id})")
@@ -392,14 +369,12 @@ class Inventory(CommonModel):
                                                     help_text=_("Reserved quantity in units"))
     reorder_level = models.PositiveIntegerField(default=10, help_text=_("Reorder level in units"))
 
-    # Additional useful fields
     last_restocked = models.DateTimeField(null=True, blank=True, db_index=True,
                                            help_text=_("Last restocked date and time"))
     last_checked = models.DateTimeField(auto_now=True, help_text=_("Last checked date and time"))
     is_backorder_allowed = models.BooleanField(default=False, db_index=True,
                                                help_text=_("Allow backorders for this inventory"))
 
-    # Add for better inventory management
     cost_price = models.DecimalField(
         max_digits=10, decimal_places=2,
         null=True, blank=True, db_index=True,
@@ -408,12 +383,8 @@ class Inventory(CommonModel):
     batch_number = models.CharField(max_length=100, blank=True, null=True, db_index=True,
                                     help_text=_("Batch number of this inventory"))
     expiry_date = models.DateField(null=True, blank=True, db_index=True, help_text=_("Expiry date of this inventory"))
-
-    # Add for inventory valuation
     last_cost_update = models.DateTimeField(null=True, blank=True, db_index=True,
                                             help_text=_("Last cost update date and time"))
-
-    # Additional manufacturing fields for SPECIFIC inventory batches
     manufacturing_cost_adjustment = models.DecimalField(
         max_digits=10, decimal_places=2,
         null=True, blank=True,
@@ -513,15 +484,9 @@ class Inventory(CommonModel):
         Returns:
             bool: True if inventory is valid for fulfillment, False otherwise with detailed logging
         """
-        import logging
-        logger = logging.getLogger(__name__)
-
-        # Basic model validation
         if not super().is_valid():
-            logger.warning(f"Inventory {self.id} failed basic model validation")
             return False
 
-        # Check required fields
         required_fields = {
             'product_variant_id': bool(self.product_variant_id),
             'warehouse_id': bool(self.warehouse_id),
@@ -534,7 +499,6 @@ class Inventory(CommonModel):
             logger.warning(f"Inventory {self.id} is missing required fields: {', '.join(missing_fields)}")
             return False
 
-        # Check warehouse validity
         if not hasattr(self, 'warehouse') or not self.warehouse:
             logger.warning(f"Inventory {self.id} has no associated warehouse")
             return False
@@ -543,7 +507,6 @@ class Inventory(CommonModel):
             logger.warning(f"Inventory {self.id} has invalid warehouse {self.warehouse_id}")
             return False
 
-        # Check product variant validity
         if not hasattr(self, 'product_variant') or not self.product_variant:
             logger.warning(f"Inventory {self.id} has no associated product variant")
             return False
@@ -552,7 +515,6 @@ class Inventory(CommonModel):
             logger.warning(f"Inventory {self.id} has invalid product variant {self.product_variant_id}")
             return False
 
-        # Check quantity constraints
         if not isinstance(self.quantity_available, (int, float, Decimal)) or self.quantity_available < 0:
             logger.warning(f"Inventory {self.id} has invalid available quantity: {self.quantity_available}")
             return False
@@ -568,12 +530,10 @@ class Inventory(CommonModel):
             )
             return False
 
-        # Check reorder level
         if not isinstance(self.reorder_level, (int, float, Decimal)) or self.reorder_level < 0:
             logger.warning(f"Inventory {self.id} has invalid reorder level: {self.reorder_level}")
             return False
 
-        # Check cost-related fields
         cost_fields = {
             'cost_price': self.cost_price,
             'manufacturing_cost_adjustment': self.manufacturing_cost_adjustment,
@@ -585,12 +545,10 @@ class Inventory(CommonModel):
                 logger.warning(f"Inventory {self.id} has invalid {field}: {value}")
                 return False
 
-        # Check expiry date
         if self.expiry_date and not isinstance(self.expiry_date, datetime.date):
             logger.warning(f"Inventory {self.id} has invalid expiry date: {self.expiry_date}")
             return False
 
-        # Check if inventory is expired
         if self.is_expired:
             logger.warning(f"Inventory {self.id} has expired on {self.expiry_date}")
             return False
@@ -604,21 +562,15 @@ class Inventory(CommonModel):
         Returns:
             tuple: (can_delete: bool, reason: str)
         """
-        import logging
-        logger = logging.getLogger(__name__)
-
-        # Check parent class constraints
         can_delete, reason = super().can_be_deleted()
         if not can_delete:
             logger.warning(f"Cannot delete inventory {self.id}: {reason}")
             return False, reason
 
         from orders.enums import active_order_statuses
-        # Check if there are any active orders for this inventory
         if hasattr(self, 'order_items') and self.order_items.filter(
                 order__status__in=active_order_statuses,
-                order__is_deleted=False,
-                is_deleted=False
+                order__is_deleted=False
         ).exists():
             active_orders = self.order_items.filter(
                 order__status__in=active_order_statuses,
@@ -629,27 +581,21 @@ class Inventory(CommonModel):
             return False, message
 
         from orders.enums import active_order_statuses
-        # Check if there are any pending shippings with this inventory
         active_shippings_with_active_orders = ShippingClass.objects.filter(
                 orders__status__in=active_order_statuses,
                 orders__is_active=True,
-                is_active=False,
         )
         if active_shippings_with_active_orders.exists():
             for shipping in active_shippings_with_active_orders:
-                # If there are any active shippings with active orders which contain the inventory product
                 if shipping.orders.filter(
                         order_items__product__product_variants__in=[self.product_variant],
-                        status__in=active_order_statuses,
-                        is_active=True,
-                        is_deleted=False
+                        status__in=active_order_statuses
                 ).exists():
 
                     message = f"Cannot delete inventory with active shippings and orders."
                     logger.warning(f"{message} (Inventory ID: {self.id})")
                     return False, message
 
-        # Check if warehouse is operational (inverse logic - we can delete if warehouse is NOT operational)
         if self.warehouse and self.warehouse.is_operational:
             message = "Cannot delete inventory from operational warehouse"
             logger.warning(f"{message} (Inventory ID: {self.id}, Warehouse ID: {self.warehouse_id})")
@@ -722,11 +668,251 @@ class Inventory(CommonModel):
         if self.product_variant.is_deleted:
             raise ValidationError(_("Cannot assign inventory to deleted product variant"))
 
-        # Validate expiry date is not in the past for items with stock
         if self.expiry_date and self.expiry_date < timezone.now().date() and self.quantity_available > 0:
             raise ValidationError(_("Expired items cannot have positive stock quantity"))
 
     def save(self, *args, **kwargs):
         """Auto-update last_checked on save"""
         self.last_checked = timezone.now()
+        kwargs['update_fields'] = ['last_checked', 'date_updated']
         super().save(*args, **kwargs)
+
+
+class StockMovement(CommonModel):
+    """
+    Tracks all inventory movements (inbound, outbound, adjustments).
+    """
+
+    class MovementType(models.TextChoices):
+        PURCHASE = 'purchase', _('Purchase')
+        SALE = 'sale', _('Sale')
+        RETURN = 'return', _('Return')
+        ADJUSTMENT = 'adjustment', _('Adjustment')
+        TRANSFER_IN = 'transfer_in', _('Transfer In')
+        TRANSFER_OUT = 'transfer_out', _('Transfer Out')
+        LOSS = 'loss', _('Loss/Theft')
+        DAMAGED = 'damaged', _('Damaged')
+        EXPIRE = 'expire', _('Expired')
+        COUNT = 'count', _('Stock Count')
+
+    inventory = models.ForeignKey(
+        'inventory.Inventory',
+        on_delete=models.PROTECT,
+        related_name='stock_movements',
+        help_text=_('Related inventory item')
+    )
+    movement_type = models.CharField(
+        max_length=20,
+        choices=MovementType.choices,
+        db_index=True,
+        help_text=_('Type of stock movement')
+    )
+    quantity = models.IntegerField(
+        help_text=_('Positive for additions, negative for subtractions')
+    )
+    reference = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        db_index=True,
+        help_text=_('Reference number/ID from source system (e.g., order number)')
+    )
+    source_warehouse = models.ForeignKey(
+        'inventory.WarehouseProfile',
+        on_delete=models.PROTECT,
+        related_name='outgoing_movements',
+        null=True,
+        blank=True,
+        help_text=_('Source warehouse for transfers')
+    )
+    destination_warehouse = models.ForeignKey(
+        'inventory.WarehouseProfile',
+        on_delete=models.PROTECT,
+        related_name='incoming_movements',
+        null=True,
+        blank=True,
+        help_text=_('Destination warehouse for transfers')
+    )
+    notes = models.TextField(
+        blank=True,
+        null=True,
+        help_text=_('Additional notes about this movement')
+    )
+    unit_cost = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text=_('Unit cost at time of movement')
+    )
+    total_value = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text=_('Total value of this movement (quantity × unit cost)')
+    )
+    movement_date = models.DateTimeField(
+        default=timezone.now,
+        db_index=True,
+        help_text=_('When this movement actually occurred')
+    )
+    processed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text=_('User who processed this movement')
+    )
+
+    class Meta:
+        db_table = 'inventory_stock_movements'
+        verbose_name = _('Stock Movement')
+        verbose_name_plural = _('Stock Movements')
+        ordering = ['-movement_date', '-date_created']
+        indexes = CommonModel.Meta.indexes + [
+            models.Index(fields=['inventory', 'movement_date']),
+            models.Index(fields=['movement_type', 'movement_date']),
+            models.Index(fields=['reference']),
+            models.Index(fields=['movement_date', 'movement_type']),
+            models.Index(fields=['inventory', 'movement_type', 'movement_date']),
+            models.Index(fields=['source_warehouse', 'movement_date']),
+            models.Index(fields=['destination_warehouse', 'movement_date']),
+            models.Index(fields=['total_value', 'movement_date']),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=~models.Q(source_warehouse=models.F('destination_warehouse')),
+                name='different_source_destination'
+            ),
+            models.CheckConstraint(
+                check=~(
+                    (models.Q(movement_type__in=['transfer_in', 'transfer_out']) &
+                     models.Q(source_warehouse__isnull=True) &
+                     models.Q(destination_warehouse__isnull=True))
+                ),
+                name='transfer_requires_warehouse'
+            ),
+            models.CheckConstraint(
+                check=~(
+                        (models.Q(movement_type='transfer_in') & models.Q(destination_warehouse__isnull=True)) |
+                        (models.Q(movement_type='transfer_out') & models.Q(source_warehouse__isnull=True))
+                ),
+                name='valid_transfer_warehouses'
+            ),
+            models.CheckConstraint(
+                check=~(
+                        models.Q(quantity=0) |
+                        (models.Q(movement_type__in=['purchase', 'return', 'transfer_in']) & models.Q(quantity__lt=0)) |
+                        (models.Q(movement_type__in=['sale', 'loss', 'damaged', 'expire', 'transfer_out']) &
+                         models.Q(quantity__gt=0))
+                ),
+                name='valid_quantity_for_movement_type'
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.get_movement_type_display()} - {self.quantity} units of {self.inventory}"
+
+    def is_valid(self, *args, **kwargs) -> bool:
+        """
+        Validate the stock movement.
+
+        Returns:
+            bool: True if the movement is valid, False otherwise
+        """
+        if not super().is_valid(*args, **kwargs):
+            return False
+
+        if self.movement_type in ['transfer_in', 'transfer_out']:
+            if not self.source_warehouse and not self.destination_warehouse:
+                logger.warning(
+                    f"StockMovement {self.id} is missing both source and destination warehouse"
+                )
+                return False
+
+        if self.quantity == 0:
+            logger.warning(f"StockMovement {self.id} has zero quantity")
+            return False
+
+        if not hasattr(self, 'inventory') or not self.inventory:
+            logger.warning(f"StockMovement {self.id} is missing inventory item")
+            return False
+
+        if not self.inventory.is_valid():
+            logger.warning(
+                f"StockMovement {self.id} has invalid inventory item {self.inventory_id}"
+            )
+            return False
+
+        if self.quantity < 0 and not self._has_sufficient_stock():
+            logger.warning(
+                f"StockMovement {self.id} would result in negative stock for {self.inventory_id}"
+            )
+            return False
+
+        logger.debug(f"StockMovement {self.id} validation successful")
+        return True
+
+    def can_be_deleted(self) -> tuple[bool, str]:
+        """
+        Check if the stock movement can be safely deleted.
+
+        Returns:
+            tuple: (can_delete: bool, reason: str)
+        """
+        can_delete, reason = super().can_be_deleted()
+        if not can_delete:
+            return can_delete, reason
+
+        if self.quantity > 0:
+            current_stock = self.inventory.quantity_available
+            if current_stock < self.quantity:
+                message = (
+                    f"Cannot delete this {self.get_movement_type_display()} movement "
+                    f"as it would make inventory negative for {self.inventory}"
+                )
+                logger.warning(f"{message} (Movement ID: {self.id})")
+                return False, message
+
+        if self.reference and self.movement_type in ['transfer_in', 'transfer_out']:
+            from orders.enums import active_order_statuses
+            from orders.models import Order
+            if Order.objects.filter(
+                    order_number=self.reference,
+                    status__in=active_order_statuses
+            ).exists():
+                message = (
+                    f"Cannot delete movement for active transfer {self.reference}"
+                )
+                logger.warning(f"{message} (Movement ID: {self.id})")
+                return False, message
+
+        return True, ""
+
+    def _has_sufficient_stock(self) -> bool:
+        """Check if there's enough stock for outbound movement."""
+        if self.quantity >= 0:
+            return True
+
+        current_stock = self.inventory.quantity_available
+        return current_stock >= abs(self.quantity)
+
+    def save(self, *args, **kwargs):
+        """Save the stock movement and update inventory."""
+        if self.unit_cost is not None:
+            self.total_value = abs(self.quantity) * self.unit_cost
+
+        if not self.movement_date:
+            self.movement_date = timezone.now()
+
+        if self.movement_type == 'transfer_in' and not self.destination_warehouse:
+            self.destination_warehouse = self.inventory.warehouse
+        elif self.movement_type == 'transfer_out' and not self.source_warehouse:
+            self.source_warehouse = self.inventory.warehouse
+
+            super().save(*args, **kwargs)
+
+            if not self.pk:
+                self.inventory.quantity_available = F('quantity_available') + self.quantity
+                self.inventory.save(update_fields=['quantity_available', 'date_updated'])

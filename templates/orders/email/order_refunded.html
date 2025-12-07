@@ -1,0 +1,34 @@
+{% extends '../../base.html' %}
+
+{% block title %}Order #{{ order.order_number }} - Refund Processed{% endblock %}
+
+{% block content %}
+    <h2>Your Refund Has Been Processed</h2>
+    <p>Hello {{ user.first_name|default:'there' }},</p>
+    <p>We've processed your refund for order #{{ order.order_number }}.</p>
+    
+    <table>
+        <tr>
+            <th>Order Number:</th>
+            <td>#{{ order.order_number }}</td>
+        </tr>
+        <tr>
+            <th>Refund Amount:</th>
+            <td>${{ order.refund_amount|default:order.total_amount }}</td>
+        </tr>
+        <tr>
+            <th>Refund Method:</th>
+            <td>{{ order.payment_method|default:'Original payment method' }}</td>
+        </tr>
+    </table>
+    
+    <div style="background-color: #e8f5e9; padding: 15px; border-radius: 4px; margin: 15px 0;">
+        <p><strong>Note:</strong> Please allow 5-10 business days for the refund to appear in your account, depending on your payment method.</p>
+    </div>
+    
+    <p>If you have any questions about your refund, please contact our support team.</p>
+    
+    <p>We're sorry to see you go, and we hope to serve you again in the future!</p>
+    
+    <p>Best regards,<br>The {{ site_name }} Team</p>
+{% endblock %}

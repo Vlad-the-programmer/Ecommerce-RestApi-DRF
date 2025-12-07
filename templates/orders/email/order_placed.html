@@ -1,0 +1,43 @@
+{% extends '../../base.html' %}
+
+{% block title %}Order #{{ order.order_number }} - Order Placed{% endblock %}
+
+{% block content %}
+    <h2>Thank you for your order!</h2>
+    <p>Hello {{ user.first_name|default:'there' }},</p>
+    <p>We've received your order #{{ order.order_number }} and it's being processed. Here's what you ordered:</p>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>Item</th>
+                <th>Quantity</th>
+                <th>Price</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in order.items.all %}
+            <tr>
+                <td>{{ item.product_variant.name }}</td>
+                <td>{{ item.quantity }}</td>
+                <td>${{ item.price }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <tfoot>
+            <tr>
+                <td colspan="2" style="text-align: right;"><strong>Total:</strong></td>
+                <td><strong>${{ order.total_amount }}</strong></td>
+            </tr>
+        </tfoot>
+    </table>
+    
+    <p>You can view your order details by clicking the button below:</p>
+    <p style="text-align: center;">
+        <a href="{{ order_url }}" class="button">View Order</a>
+    </p>
+    
+    <p>If you have any questions about your order, please contact our support team.</p>
+    
+    <p>Best regards,<br>The {{ site_name }} Team</p>
+{% endblock %}

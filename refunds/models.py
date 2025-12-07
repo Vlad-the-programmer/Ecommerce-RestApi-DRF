@@ -53,8 +53,6 @@ class Refund(CommonModel):
         verbose_name=_('Customer'),
         help_text=_('Customer receiving the refund')
     )
-
-    # Refund details
     status = models.CharField(
         _('Status'),
         max_length=20,
@@ -83,7 +81,6 @@ class Refund(CommonModel):
         help_text=_('Method used to process the refund')
     )
 
-    # Financial details
     amount_requested = models.DecimalField(
         _('Amount Requested'),
         max_digits=10,
@@ -114,7 +111,6 @@ class Refund(CommonModel):
         default='USD',
         help_text=_('Currency of the refund amount')
     )
-    # Processing details
     requested_at = models.DateTimeField(
         _('Requested At'),
         auto_now_add=True,
@@ -141,7 +137,6 @@ class Refund(CommonModel):
         blank=True,
         help_text=_('When the refund was completed')
     )
-    # Additional metadata
     customer_notes = models.TextField(
         _('Customer Notes'),
         blank=True,
@@ -634,27 +629,6 @@ class Refund(CommonModel):
         except Exception as e:
             logger.error(f"Failed to auto-cancel refund {self.refund_number}: {str(e)}")
 
-    def send_notification(self, notification_type=None, notifier=None):
-        """Send a notification for the refund."""
-        if notifier is None:
-            notifier = RefundNotifier(self)
-
-        if notification_type == RefundStatus.APPROVED:
-            notifier.send_approval_notification()
-        elif notification_type == RefundStatus.REJECTED:
-            notifier.send_rejection_notification()
-        elif notification_type == RefundStatus.CANCELLED:
-            notifier.send_cancellation_notification()
-        elif notification_type == RefundStatus.COMPLETED:
-            notifier.send_completion_notification()
-        else:
-            logger.error(f"Invalid notification type: {notification_type}"
-                         f"Types are: {RefundStatus.APPROVED, RefundStatus.REJECTED, 
-                         RefundStatus.CANCELLED, RefundStatus.COMPLETED}"
-                         )
-
-            raise ValueError(f"Invalid notification type: {notification_type}")
-        pass
 
 class RefundItem(CommonModel):
     """
